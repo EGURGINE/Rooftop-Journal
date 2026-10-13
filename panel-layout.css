@@ -1,0 +1,32 @@
+/* Only dedicated handles move/resize a panel; existing gameplay buttons keep their behavior. */
+.layout-panel{isolation:isolate}
+.panel-layout-toolbar{display:flex;justify-content:flex-end;align-items:center;min-height:17px;flex:0 0 17px;margin:-6px 0 4px;position:relative;z-index:2}
+.panel-layout-move{display:inline-flex;gap:4px;align-items:center;justify-content:center;min-width:49px;min-height:20px;padding:1px 5px;border:1px solid #aeb99f66;background:#e4e7d7b5;color:#849078;font-size:8px;letter-spacing:.06em;cursor:grab;touch-action:none;border-radius:2px}
+.panel-layout-move:hover,.panel-layout-move:focus-visible{background:#d7dfc9;color:#52674a;border-color:#839575}
+.panel-layout-dots{font-size:17px;line-height:13px;letter-spacing:-3px;margin-right:3px;transform:rotate(90deg)}
+.panel-layout-move:active,.panel-layout-changing .panel-layout-move{cursor:grabbing}
+.panel-layout-resize{position:absolute;right:2px;bottom:2px;z-index:6;width:23px;height:23px;display:grid;place-items:center;background:#e9eadbcc;color:#849473;border:0;cursor:nwse-resize;touch-action:none;border-radius:2px}
+.panel-layout-resize svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1}
+.panel-layout-resize:hover,.panel-layout-resize:focus-visible{background:#d5dfc8;color:#486341}
+.panel-layout-move:focus-visible,.panel-layout-resize:focus-visible{outline:2px solid #81936b;outline-offset:2px}
+.panel-layout-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.journal>.panel-layout-toolbar{margin:0;padding:4px 7px 0;background:#eeecdf;min-height:24px}
+.custom-layout{box-sizing:border-box!important;min-width:0!important;min-height:0!important;overflow:auto;scrollbar-width:thin;scrollbar-color:#b8c2a8 transparent}
+.custom-layout>.panel-layout-toolbar{position:sticky;top:0;z-index:5;background:var(--paper,#eeecdf)}
+.custom-layout>.panel-layout-resize{position:fixed;right:auto;bottom:auto}
+.custom-layout.survival-panel{display:flex;flex-direction:column;padding-bottom:0}
+.custom-layout.survival-panel>.panel-layout-toolbar,.custom-layout.survival-panel>.panel-heading,.custom-layout.survival-panel>h2,.custom-layout.survival-panel>.roof-sub,.custom-layout.survival-panel>.section-rule,.custom-layout.survival-panel>.resources,.custom-layout.survival-panel>.economy,.custom-layout.survival-panel>.stats,.custom-layout.survival-panel>.facility-list,.custom-layout.survival-panel>.panel-footer{flex-shrink:0}
+.custom-layout.survival-panel>.panel-footer{margin-top:auto;padding-right:31px}
+.custom-layout.journal{display:flex;flex-direction:column;overflow:hidden;padding-bottom:10px}
+.custom-layout.journal>.journal-heading{flex:0 0 auto}
+.custom-layout.journal>.journal-entries,.custom-layout.journal.expanded>.journal-entries{flex:1 1 auto;min-height:0;max-height:none;overflow:auto;padding-bottom:13px}
+.custom-layout.action-dock{display:flex;flex-direction:column;padding-bottom:24px}
+.custom-layout.action-dock>.dock-header,.custom-layout.action-dock>.action-tabs,.custom-layout.action-dock>.district-strip,.custom-layout.action-dock>.building-status,.custom-layout.action-dock>.current-action{flex:0 0 auto}
+.custom-layout.action-dock>.actions{flex:1 0 75px;min-height:75px;max-height:none;overflow:auto;align-content:start}
+.custom-layout.action-dock>.district-strip{min-height:63px}
+.custom-layout.action-dock .action-tabs{flex-wrap:wrap;row-gap:0}
+.custom-layout.action-dock .actions.build-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.custom-layout.action-dock .actions.resident-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.panel-layout-changing{outline:1px solid #8c9f73;box-shadow:0 10px 45px #10271d55!important}
+body.panel-layout-dragging,body.panel-layout-dragging *{user-select:none!important}
+@media(max-height:600px){.panel-layout-toolbar{min-height:15px;flex-basis:15px}.custom-layout.action-dock>.actions{flex-basis:50px;min-height:50px}}

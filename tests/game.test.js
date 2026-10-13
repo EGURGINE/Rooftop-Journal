@@ -1,329 +1,76 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, tick, startAction, getActions, getEvent, chooseEvent, serialize, deserialize, getDay, getHour, getWeather, getStory } from '../src/game.js';
-import { EVENTS, END_REQUIREMENTS } from '../src/content.js';
+import {writeFileSync,mkdirSync} from 'node:fs';
+import {createGame,tick,startAction,getActions,getEvent,chooseEvent,serialize,deserialize,getDay,getTimeRate,getEconomy,getBuildings,selectBuilding,getResidents,assignResident,getStory} from '../src/game.js';
+import {EVENTS} from '../src/content.js';
 
-function quietGame(seed = 123456789) {
-  const state = createGame(seed);
-  state.nextEventAt = 1000000;
-  return state;
+function resolve(s,policy={}){
+ const e=getEvent(s);if(!e)return;
+ let choice;
+ if(e.id.startsWith('zombie:'))choice=['decoy','blade','rope','scout','fight'].map(id=>e.choices.find(c=>c.id===id&&!c.disabled)).find(Boolean);
+ else if(policy.defer?.includes(e.id))choice=e.choices.find(c=>c.id==='later'||c.id==='decline');
+ else if(e.id==='stray_dog')choice=e.choices.find(c=>c.id==='decline');
+ else choice=e.choices.find(c=>!c.disabled&&c.id!=='later'&&c.id!=='decline');
+ choice=choice||e.choices.find(c=>!c.disabled);assert.ok(choice,`No choice for ${e.id}`);assert.equal(chooseEvent(s,choice.id).ok,true);
 }
+function finish(s,policy={}){let guard=0;while(s.action||s.event){if(s.ending)break;if(s.event)resolve(s,policy);else tick(s,1);assert.ok(++guard<20000,'action stalled');}}
+function doAction(s,id,policy={}){if(s.event)resolve(s,policy);const result=startAction(s,id);assert.equal(result.ok,true,`${id}: ${result.reason}`);finish(s,policy);assert.equal(s.ending,null,`died on ${id} day ${getDay(s)}`);}
 
-test('same seed gives the same roof, weather, and action outcomes', () => {
-  const a = quietGame('under-the-same-sky');
-  const b = quietGame('under-the-same-sky');
-  assert.deepEqual(a, b);
-  startAction(a, 'scavenge');
-  startAction(b, 'scavenge');
-  tick(a, 100);
-  tick(b, 100);
-  assert.deepEqual(a, b);
-  const before = a.rng;
-  assert.deepEqual(getWeather(a), getWeather(b));
-  assert.equal(a.rng, before, 'rendering weather must not consume random state');
-  const variants = new Set(Array.from({ length: 50 }, (_, i) => createGame(`roof-${i}`).roof.type));
-  assert.equal(variants.size, 4);
-});
+test('idle is exactly one minute per second regardless of action speed',()=>{for(const speed of [1,2,4]){const s=createGame(42);s.speed=speed;s.nextEventAt=10000;tick(s,15);assert.equal(s.time,15);assert.equal(getTimeRate(s),1);}});
+test('action time accelerates and stops at its exact completion boundary',()=>{const s=createGame(42);s.nextEventAt=10000;s.stats.health=80;startAction(s,'heal');s.speed=2;const duration=s.action.total;tick(s,duration/24+10);assert.equal(s.action,null);assert.ok(Math.abs(s.time-(duration+10))<1e-6);assert.equal(getTimeRate(s),1);});
+test('event and manual pause consume no time or supplies',()=>{const s=createGame(42);tick(s,30);assert.equal(s.event,'first_knock');const before=serialize(s);tick(s,300);assert.equal(serialize(s),before);resolve(s);s.paused=true;const paused=serialize(s);tick(s,300);assert.equal(serialize(s),paused);});
+test('buildings have exactly floors times three finite search locations and 2–3 persistent zombies',()=>{for(const seed of [1,42,99]){const s=createGame(seed);for(const b of s.buildings){assert.equal(b.capacity,b.height*3);assert.ok([2,3].includes(b.zombiesTotal));}}const s=createGame(42);s.nextEventAt=10000;s.buildings[0].searched=s.buildings[0].capacity;s.buildings[0].zombiesRemaining=0;for(const id of ['scavenge','water'])assert.equal(startAction(s,id).ok,false);});
+test('water searches consume the same finite building pool',()=>{const s=createGame(42);s.nextEventAt=10000;doAction(s,'water');assert.equal(s.buildings[0].searched,1);doAction(s,'scavenge');assert.equal(s.buildings[0].searched,2);assert.equal(s.buildings[0].zombiesRemaining,s.buildings[0].zombiesTotal-1);});
+test('retreat never clears a zombie or grants loot; equipment has a real cost',()=>{const s=createGame(42);s.nextEventAt=10000;doAction(s,'craft_blade');assert.equal(s.gear.blade,4);assert.equal(s.resources.parts,1);doAction(s,'scavenge');startAction(s,'scavenge');while(s.action)tick(s,1);assert.ok(s.event.startsWith('zombie:'));const b=s.buildings[0],z=b.zombiesRemaining,locations=b.searched,resources={...s.resources};chooseEvent(s,'retreat');assert.equal(b.zombiesRemaining,z);assert.equal(b.searched,locations);assert.deepEqual(s.resources,resources);assert.equal(startAction(s,'scavenge').ok,false);startAction(s,'clear_zombies');while(s.action)tick(s,1);const health=s.stats.health;chooseEvent(s,'blade');assert.equal(b.zombiesRemaining,z-1);assert.equal(s.gear.blade,3);assert.equal(s.stats.health,health-5);});
+test('unprepared idle survival ends from finite food and water',()=>{const s=createGame(42);s.nextEventAt=1e8;for(let i=0;i<5&&!s.ending;i++)tick(s,3600);assert.equal(s.ending?.id,'death');assert.ok(getDay(s)<=7);});
+test('basic facilities cannot sustain even one person without further investment',()=>{const s=createGame(42);s.facilities.garden=1;s.facilities.collector=1;const e=getEconomy(s);assert.ok(e.food.net<0);assert.ok(e.water.net<0);assert.ok(e.food.days>0);});
+test('production scales with residents, facilities, water and maintained power',()=>{const s=createGame(42);s.facilities.garden=3;s.facilities.collector=3;s.facilities.power=2;const a=getEconomy(s);assert.ok(a.food.production>4);assert.ok(a.water.production>7);s.resources.parts=0;const b=getEconomy(s);assert.ok(b.food.production<a.food.production);assert.ok(b.water.production<a.water.production);s.resources.water=0;assert.equal(getEconomy(s).food.production,0);});
+test('roof claims require all locations AND all persistent zombies',()=>{const s=createGame(42);const b=s.buildings[1];b.unlocked=true;selectBuilding(s,b.id);s.resources.parts=20;s.gear.rope=1;b.searched=b.capacity-1;b.zombiesRemaining=0;assert.equal(startAction(s,'claim_roof').ok,false);b.searched++;b.zombiesRemaining=1;assert.equal(startAction(s,'claim_roof').ok,false);b.zombiesRemaining=0;assert.equal(startAction(s,'claim_roof').ok,true);});
+test('residents require beds and actual work facilities, paused management is allowed',()=>{const s=createGame(42);s.residents.push({id:'yoon',name:'윤',role:'정찰자',description:'',buildingId:'home',assignment:'rest'});s.paused=true;assert.equal(assignResident(s,'yoon','clinic','rest').ok,false);assert.equal(assignResident(s,'yoon','home','farm').ok,false);s.facilities.garden=1;assert.equal(assignResident(s,'yoon','home','farm').ok,true);assert.equal(getEconomy(s).people,2);});
+test('save roundtrip preserves finite locations, timing, assignments and gear',()=>{const s=createGame(42);s.nextEventAt=10000;doAction(s,'craft_blade');doAction(s,'scavenge');startAction(s,'water');tick(s,2);const restored=deserialize(serialize(s));assert.ok(restored);assert.equal(restored.action.remaining,s.action.remaining);assert.equal(restored.buildings[0].searched,1);assert.deepEqual(restored.gear,s.gear);assert.equal(restored.time,s.time);assert.equal(restored.facilities,restored.buildings[0].facilities);});
+test('old completed escape saves migrate to a paused chapter without ending',()=>{const old=createGame(99);old.version=2;old.time=1440*19;old.resources.food=128;old.resources.water=78;old.flags.collector=true;old.flags.garden=true;old.ending={id:'departure'};const s=deserialize(JSON.stringify(old));assert.ok(s);assert.equal(s.version,3);assert.equal(s.ending,null);assert.equal(s.time,old.time);assert.equal(s.roof.height,old.roof.height);assert.equal(s.facilities.collector,1);assert.equal(s.facilities.garden,1);assert.equal(s.paused,true);assert.equal(s.resources.food,getEconomy(s).capacity.food);assert.ok(s.log.some(x=>x.text.includes('저장 용량')));});
+test('malformed save data and impossible claimed roofs are rejected',()=>{assert.equal(deserialize('{'),null);const s=createGame(42);s.buildings[1].claimed=true;assert.equal(deserialize(serialize(s)),null);const t=createGame(42);t.resources.food=Infinity;assert.equal(deserialize(serialize(t)),null);});
+test('story is earned by clues and settlement rather than calendar or ending',()=>{const s=createGame(42);s.time=1440*100;assert.equal(getStory(s).chapter,1);assert.equal(EVENTS.some(e=>e.choices.some(c=>c.effects.ending)),false);assert.ok(EVENTS.length>=30);assert.ok(EVENTS.every(e=>e.body.includes('\n\n')));});
 
-test('time starts at 08:00 and advances one day in 240 real seconds', () => {
-  const state = quietGame();
-  assert.equal(getDay(state), 1);
-  assert.equal(getHour(state), 8);
-  tick(state, 240);
-  assert.equal(state.time, 1440);
-  assert.equal(getDay(state), 2);
-  assert.equal(getHour(state), 8);
-});
-
-test('explicit pause freezes actions and consumption; save has no offline progress', () => {
-  const state = quietGame();
-  startAction(state, 'scavenge');
-  state.paused = true;
-  const before = serialize(state);
-  tick(state, 500);
-  assert.equal(serialize(state), before);
-  const restored = deserialize(before);
-  assert.deepEqual(restored, state);
-  assert.equal(restored.time, 0);
-  state.paused = false;
-  tick(state, 1);
-  assert.equal(state.time, 6);
-});
-
-test('first encounter arrives at 20 seconds and automatically freezes all progress', () => {
-  const state = createGame(134534);
-  startAction(state, 'scavenge');
-  tick(state, 120);
-  assert.equal(state.time, 120, 'unused elapsed time must stop at the encounter boundary');
-  assert.equal(state.event, 'first_knock');
-  const before = serialize(state);
-  tick(state, 300);
-  assert.equal(serialize(state), before);
-  const restored = deserialize(before);
-  assert.equal(getEvent(restored).title, getEvent(state).title);
-  assert.equal(chooseEvent(restored, 'look').ok, true);
-  tick(restored, 1);
-  assert.equal(restored.time, 126);
-});
-
-test('the dog consumes exactly 1.5 times as much food and improves morale', () => {
-  const alone = quietGame();
-  const dog = quietGame();
-  dog.flags.dog = true;
-  alone.resources.food = dog.resources.food = 100;
-  tick(alone, 240);
-  tick(dog, 240);
-  assert.ok(Math.abs((100 - dog.resources.food) / (100 - alone.resources.food) - 1.5) < 1e-8);
-  assert.ok(dog.stats.morale > alone.stats.morale);
-});
-
-test('actions charge once, cannot overlap or rebuild, and deliver their promised effect', () => {
-  const state = quietGame();
-  const defense = state.stats.defense;
-  assert.deepEqual(startAction(state, 'barricade'), { ok: true });
-  assert.equal(state.resources.parts, 2);
-  assert.equal(startAction(state, 'barricade').ok, false);
-  assert.equal(startAction(state, 'scavenge').ok, false);
-  assert.equal(state.resources.parts, 2);
-  tick(state, 35);
-  assert.equal(state.action, null);
-  assert.equal(state.flags.barricade, true);
-  assert.ok(state.stats.defense > defense + 24);
-  assert.equal(startAction(state, 'barricade').ok, false);
-  assert.equal(startAction(state, 'garden').ok, false, 'insufficient parts must reject before charging water');
-  assert.equal(startAction(state, 'unknown').ok, false);
-});
-
-test('medicine is spent once and healing is a timed action', () => {
-  const state = quietGame();
-  assert.equal(startAction(state, 'heal').ok, false);
-  state.stats.health = 40;
-  assert.equal(startAction(state, 'heal').ok, true);
-  assert.equal(state.resources.medicine, 1);
-  tick(state, 10);
-  assert.equal(state.stats.health, 70);
-});
-
-test('empty stores damage health and eventually end the run', () => {
-  const state = quietGame();
-  state.resources.food = 0;
-  state.resources.water = 0;
-  tick(state, 60);
-  assert.ok(state.stats.health < 81);
-  assert.equal(state.resources.food, 0);
-  assert.equal(state.resources.water, 0);
-  assert.equal(state.log.filter(entry => entry.type === 'warning').length, 2);
-  tick(state, 500);
-  assert.equal(state.ending.id, 'death');
-  assert.equal(state.stats.health, 0);
-  const before = state.time;
-  tick(state, 50);
-  assert.equal(state.time, before);
-});
-
-test('equipment produces resources and rooftop traits affect output', () => {
-  const plain = quietGame();
-  plain.roof.type = 'wide';
-  plain.flags.collector = plain.flags.garden = true;
-  const garden = structuredClone(plain);
-  garden.roof.type = 'garden';
-  tick(plain, 100);
-  tick(garden, 100);
-  assert.ok(garden.resources.food > plain.resources.food);
-  assert.ok(plain.resources.water > 10 - 3.5 * 600 / 1440);
-});
-
-test('unaffordable event choices remain open and never charge partial costs', () => {
-  const state = createGame();
-  state.event = 'river_final';
-  state.flags.route = true;
-  state.resources.food = 0;
-  const before = serialize(state);
-  assert.equal(getEvent(state).choices.find(choice => choice.id === 'leave').disabled, true);
-  assert.equal(chooseEvent(state, 'leave').ok, false);
-  assert.equal(serialize(state), before);
-  assert.equal(chooseEvent(state, 'wait').ok, true);
-  assert.equal(state.event, null);
-  assert.equal(state.ending, null);
-});
-
-test('save validation rejects corrupt state and canonicalizes authored fields', () => {
-  const state = createGame(45678);
-  const save = serialize(state);
-  assert.deepEqual(deserialize(save), state);
-  for (const invalid of ['', 'not json', '{}', 'null', '{"version":2}', '[]']) assert.equal(deserialize(invalid), null);
-  const mutations = [
-    s => { s.resources.food = -1; },
-    s => { s.stats.health = 1000; },
-    s => { s.event = 'missing'; },
-    s => { s.flags.dog = 'yes'; },
-    s => { s.action = { id: 'scavenge', remaining: -1, total: 180 }; },
-    s => { s.roof.height = 100; },
-    s => { s.log = [{ text: 'bad' }]; },
-    s => { s.eventHistory = { unknown: 1 }; },
-    s => { s.lastDay = 99; },
-  ];
-  for (const mutate of mutations) {
-    const candidate = JSON.parse(save);
-    mutate(candidate);
-    assert.equal(deserialize(JSON.stringify(candidate)), null);
-  }
-  state.roof.name = 'replaced text';
-  assert.notEqual(deserialize(serialize(state)).roof.name, 'replaced text');
-});
-
-test('speed controls scale simulation and invalid deltas cannot mutate a run', () => {
-  const state = quietGame();
-  state.speed = 2;
-  tick(state, 10);
-  assert.equal(state.time, 120);
-  const before = serialize(state);
-  for (const delta of [NaN, Infinity, -2, 0]) tick(state, delta);
-  assert.equal(serialize(state), before);
-});
-
-// Exercise real scheduling, consumption, paid construction, and encounter chains.
-// The policy preserves supplies while pursuing each of the three authored routes.
-function playRoute(route) {
-  const state = createGame(`ending-${route}`);
-  const built = ['collector', 'barricade', 'garden', 'radio'];
-  for (let second = 0; second < 240 * 50 && !state.ending; second += 1) {
-    if (state.event) {
-      const encounter = getEvent(state);
-      let desired = {
-        first_knock: 'look', old_trade: 'engineer', stray_dog: 'adopt', neighbor_lamp: 'answer', yoon_reconnect: 'answer',
-        water_cache: 'boil', wind_tarp: 'move', stairwell: 'tools', neighbor_trade: 'talk',
-        neighbor_injury: 'help', radio_voice: 'record', quiet_evening: 'watch',
-        ferry_note: 'keep', green_sprout: 'save', roof_fire: 'sand', migration: 'fortify',
-        signal_reply: 'voice', rescue_arrives: 'stay', departure: 'wait', community: 'settle',
-        yoon_photo: 'promise', school_map: 'key', school_contact: 'medicine', yoon_confession: 'record',
-        school_return: route === 'departure' ? 'children' : 'prepared', ferry_hull: 'engineer', ferry_passengers: 'together', river_lock: 'tools',
-        river_final: route === 'reunion' ? 'reunion' : route === 'departure' ? 'leave' : 'wait',
-        relay_orders: 'question', relay_record: 'save', relay_cipher: 'engineer',
-        manifest_vote: route === 'rescue' ? 'limited' : 'all', transmitter: 'engineer', convoy_choice: 'witness',
-        radio_final: route === 'rescue' ? 'limited' : route === 'rescue_all' ? 'all' : route === 'broadcast' ? 'broadcast' : 'wait',
-        roof_guests: 'welcome', water_sick: 'check', water_fix: 'engineer', ration_dispute: 'mediate',
-        pantry_return: 'include', roof_charter: 'council', siege_warning: 'prepare', last_defense: 'hold',
-        community_final: route === 'community' ? 'settle' : 'wait', rope_lesson: 'learn', clinic_manual: 'study',
-      }[encounter.id];
-      const choice = encounter.choices.find(choice => choice.id === desired && !choice.disabled) || encounter.choices.find(choice => choice.id === 'wait' && !choice.disabled) || encounter.choices.find(choice => !choice.disabled);
-      assert.ok(choice, `an available choice is required in ${encounter.id}`);
-      assert.equal(chooseEvent(state, choice.id).ok, true);
-    }
-    if (!state.action && !state.ending) {
-      const available = getActions(state).filter(action => !action.disabled);
-      let action;
-      if (state.stats.health < 65) action = 'rest';
-      else if (state.resources.food < 12 || state.resources.water < 12 || state.resources.parts < 7) action = 'scavenge';
-      else action = built.find(id => !state.flags[id]);
-      if (!action) action = available.find(candidate => candidate.id.startsWith('investigate_'))?.id;
-      if (!action && state.stats.defense < 78) action = 'repair';
-      if (!action) action = state.stats.health < 95 || state.stats.morale < 75 ? 'rest' : 'scavenge';
-      if (!available.some(candidate => candidate.id === action)) action = 'scavenge';
-      startAction(state, action);
-    }
-    tick(state, 1);
-  }
-  return state;
+// This strategy only uses public actions, events and resident assignments.
+// It deliberately declines residents until a bed and productive job can support them.
+export function runSettlement(seed=42){
+ const s=createGame(seed);let steps=0;
+ const delay={defer:['stray_dog','neighbor_lamp','jihye_found','sua_found','minwoo_found','mother_found','district_letter']};
+ function settleEvents(){while(s.event){const e=getEvent(s);const resident={neighbor_lamp:'yoon',jihye_found:'jihye',sua_found:'sua',minwoo_found:'minwoo',mother_found:'mother'}[e.id];if(resident){const canJoin=getEconomy(s).beds>getEconomy(s).people;const productive=s.buildings.some(b=>b.claimed&&b.facilities.garden>=2)||resident==='yoon';const need=resident==='minwoo'||resident==='mother';resolve(s,canJoin&&(productive||need)?{}:delay);}else resolve(s,delay);}}
+ function run(id){settleEvents();assert.ok(++steps<3000,'strategy too long');assert.equal(s.ending,null,`died day ${getDay(s)} ${JSON.stringify(s.resources)}`);const result=startAction(s,id);if(!result.ok)return false;while(s.action||s.event){if(s.ending)throw Error(`died day ${getDay(s)} on ${id}, ${JSON.stringify(s.resources)}`);if(s.event)settleEvents();else tick(s,1);}return true;}
+ function available(id){return getActions(s).some(a=>a.id===id&&!a.disabled);}
+ function assign(){for(const r of getResidents(s)){if(r.assignment!=='rest')continue;for(const b of s.buildings.filter(b=>b.claimed)){const jobs=r.id==='jihye'?['water','farm']:['farm','water'];let done=false;for(const job of jobs)if(assignResident(s,r.id,b.id,job).ok){done=true;break;}if(done)break;}}}
+ function gather(){let b=s.buildings.find(b=>b.unlocked&&b.searched<b.capacity&&!b.pendingZombie);if(!b)b=s.buildings.find(b=>b.unlocked&&b.pendingZombie);if(!b)return false;selectBuilding(s,b.id);if(b.pendingZombie){if(!s.gear.blade&&available('craft_blade'))run('craft_blade');return run('clear_zombies');}const econ=getEconomy(s);return run(s.resources.water<Math.max(4,econ.water.consumption*.7)&&s.resources.food>2?'water':'scavenge');}
+ function build(id,b=s.buildings[0]){selectBuilding(s,b.id);return available(id)&&run(id);}
+ while(!s.flags.settlementChapter&&steps<3000){settleEvents();assign();const econ=getEconomy(s);
+  if(s.stats.health<40&&s.resources.medicine>=1){run('heal');continue;}
+  if(s.stats.health<35&&s.resources.food>1&&s.resources.water>1){run('rest');continue;}
+  if(s.stats.defense<20&&s.resources.parts>=2){run('repair');continue;}
+  if(s.resources.food<Math.max(3,econ.food.consumption*.65)||s.resources.water<Math.max(3,econ.water.consumption*.65)){if(gather())continue;}
+  if(!s.gear.blade&&s.resources.parts>=2){run('craft_blade');continue;}
+  if(!s.gear.rope&&s.resources.parts>=2){run('craft_rope');continue;}
+  // Water and growing beds are investments before inviting more mouths.
+  if(s.facilities.collector<1&&s.resources.parts>=8&&build('collector'))continue;
+  if(s.facilities.garden<1&&s.resources.parts>=10&&build('garden'))continue;
+  if(s.facilities.beds<1&&s.resources.parts>=6&&build('beds'))continue;
+  if(s.facilities.storage<1&&s.resources.parts>=8&&build('storage'))continue;
+  let worked=false;
+  for(const b of s.buildings){if(!b.unlocked&&s.flags[b.prerequisite]&&s.gear.rope&&s.resources.parts>=3&&s.resources.food>2&&s.resources.water>2){selectBuilding(s,b.id);if(run(`route_${b.id}`)){worked=true;break;}}}if(worked)continue;
+  for(const b of s.buildings.filter(b=>b.unlocked&&!b.claimed&&b.searched===b.capacity&&b.zombiesRemaining===0)){selectBuilding(s,b.id);if(run('claim_roof')){worked=true;break;}}if(worked)continue;
+  const claimed=s.buildings.filter(b=>b.claimed);
+  if(s.flags.waterPlan){for(const b of claimed){if(b.facilities.collector<2&&s.resources.parts>=FACILITY_COST('collector',b.facilities.collector)&&build('collector',b)){worked=true;break;}}}if(worked)continue;
+  if(s.flags.cropPlan){for(const b of claimed){if(b.facilities.garden<2&&s.resources.parts>=FACILITY_COST('garden',b.facilities.garden)&&build('garden',b)){worked=true;break;}}}if(worked)continue;
+  if(econ.beds<=econ.people){for(const b of claimed){if(b.facilities.beds<1&&build('beds',b)){worked=true;break;}}}if(worked)continue;
+  if(s.flags.friendHome&&s.flags.automationPlan){for(const b of claimed.slice(0,2)){if(b.facilities.power<2&&build('power',b)){worked=true;break;}if(b.facilities.power>=2&&b.facilities.collector<3&&build('collector',b)){worked=true;break;}if(b.facilities.power>=2&&s.flags.seedBank&&b.facilities.garden<3&&build('garden',b)){worked=true;break;}}}if(worked)continue;
+  if(gather())continue;
+  if(s.buildings.every(b=>b.claimed)){if(s.facilities.radio<2&&build('radio'))continue;if(run('route_next'))continue;}
+  if(s.resources.parts<8){throw Error(`No gathering left at ${getDay(s)}: ${JSON.stringify(s.resources)} ${s.buildings.map(b=>`${b.id}:${b.searched}/${b.capacity}/${b.claimed}`).join(' ')}`);}
+  // Let an earned reunion/milestone event arrive while the community sustains itself.
+  tick(s,60);settleEvents();steps++;
+ }
+ if(!s.flags.settlementChapter)throw Error(`Not settled ${getDay(s)} ${JSON.stringify(s.resources)} flags${JSON.stringify(s.flags)} facilities${JSON.stringify(s.buildings.map(b=>b.facilities))}`);
+ return {s,steps};
 }
-
-for (const route of Object.keys(END_REQUIREMENTS)) {
-  test(`${route} ending is reachable with earned resources and the live event scheduler`, t => {
-    const state = playRoute(route);
-    assert.equal(state.ending?.id, route, `ended on day ${getDay(state)} with ${JSON.stringify(state.flags)}`);
-    assert.ok(state.completedActions > 5);
-    assert.ok(getDay(state) >= END_REQUIREMENTS[route].day);
-    assert.ok(Object.keys(state.eventHistory).length >= 15, 'an ending needs sustained story development');
-    assert.ok(state.stats.health > 0);
-    assert.ok(state.resources.food >= 0 && state.resources.water >= 0 && state.resources.parts >= 0);
-    assert.ok(deserialize(serialize(state)), 'completed ending must also round-trip');
-    t.diagnostic(`${route}: day ${getDay(state)}, ${Object.keys(state.eventHistory).length} distinct events, ${state.completedActions} completed actions`);
-  });
-}
-
-test('all authored events contain accessible fallbacks and long-form original narratives', () => {
-  assert.ok(EVENTS.length >= 40);
-  for (const event of EVENTS) {
-    assert.ok(event.choices.some(choice => !choice.cost && !choice.minHealth && !choice.requires && !choice.minDefense && !choice.effects.ending), event.id);
-    assert.ok(event.choices.length >= 2, event.id);
-    assert.ok(event.body.includes('\n\n'), `paragraphs in ${event.id}`);
-    assert.ok(event.body.length >= 120, `narrative depth in ${event.id}`);
-  }
-});
-
-test('all positive ending choices are impossible before day 18 even with every milestone', () => {
-  for (const event of EVENTS.filter(event => event.choices.some(choice => choice.effects.ending))) {
-    const state = createGame(87983);
-    state.time = 16 * 1440;
-    state.lastDay = getDay(state);
-    for (const key of Object.keys(state.flags)) state.flags[key] = true;
-    for (const key of Object.keys(state.resources)) state.resources[key] = 100;
-    state.event = event.id;
-    for (const choice of event.choices.filter(choice => choice.effects.ending)) {
-      assert.equal(getEvent(state).choices.find(item => item.id === choice.id).disabled, true);
-      assert.equal(chooseEvent(state, choice.id).ok, false);
-      assert.equal(state.ending, null);
-    }
-  }
-});
-
-test('early offers open preparation without ending the game', () => {
-  for (const [id, choice] of [['departure', 'leave'], ['rescue_arrives', 'leave'], ['community', 'settle']]) {
-    const state = createGame(34);
-    state.event = id;
-    assert.equal(chooseEvent(state, choice).ok, true);
-    assert.equal(state.ending, null);
-    assert.equal(state.paused, false);
-  }
-});
-
-test('delayed help persists across save and returns at the scheduled dawn', () => {
-  const state = quietGame();
-  state.event = 'school_contact';
-  assert.equal(chooseEvent(state, 'medicine').ok, true);
-  assert.equal(state.flags.sisterStable, false);
-  const restored = deserialize(serialize(state));
-  assert.ok(restored);
-  restored.nextEventAt = 1000000;
-  tick(restored, 240);
-  assert.equal(restored.flags.sisterStable, false);
-  tick(restored, 240);
-  assert.equal(restored.flags.sisterStable, true);
-  assert.equal(restored.delayed.length, 0);
-});
-
-test('external investigations require clues and produce durable follow-up flags', () => {
-  const state = quietGame();
-  assert.equal(startAction(state, 'investigate_school').ok, false);
-  state.flags.schoolLocated = true;
-  assert.equal(startAction(state, 'investigate_school').ok, true);
-  assert.equal(state.resources.food, 6);
-  tick(state, 80);
-  assert.equal(state.flags.schoolRecon, true);
-  assert.equal(startAction(state, 'investigate_school').ok, false);
-  assert.ok(getStory(state).clues.some(clue => clue.id === 'schoolRecon'));
-});
-
-test('v1 saves preserve supplies and roof; old successful endings become paused story continuations', () => {
-  for (const ending of [null, 'departure', 'rescue', 'community', 'death']) {
-    const state = createGame(54321);
-    state.version = 1;
-    state.time = 8640;
-    state.lastDay = getDay(state);
-    state.nextEventAt = state.time + 300;
-    delete state.delayed;
-    delete state.deferred;
-    state.flags = { dog: false, collector: true, garden: false, barricade: true, radio: false, ally: true, trusted: false, rescueClue: false, rescueSignal: false, route: true, rescueDeclined: false };
-    if (ending) state.ending = { id: ending, title: 'old ending', body: 'old story' };
-    const restored = deserialize(serialize(state));
-    assert.ok(restored, ending);
-    assert.equal(restored.version, 2);
-    assert.equal(restored.time, state.time);
-    assert.deepEqual(restored.resources, state.resources);
-    assert.deepEqual(restored.roof, state.roof);
-    if (ending === 'death') assert.equal(restored.ending.id, 'death');
-    else assert.equal(restored.ending, null);
-    if (ending && ending !== 'death') assert.equal(restored.paused, true);
-    assert.ok(deserialize(serialize(restored)));
-  }
-});
+function FACILITY_COST(id,level){return (id==='collector'?[8,16,28]:[10,18,30])[level];}
+test('earned supplies and choices can reunite the family and reach ongoing automation',()=>{const{s,steps}=runSettlement();assert.equal(s.ending,null);assert.ok(s.flags.familyChapter);assert.ok(s.flags.settlementChapter);assert.ok(s.residents.length>=5);assert.ok(s.buildings.filter(b=>b.claimed).length>=2);assert.ok(s.completedActions>100);assert.ok(s.buildings.every(b=>b.searched<=b.capacity));assert.ok(deserialize(serialize(s)));mkdirSync('artifacts',{recursive:true});writeFileSync('artifacts/settlement-qa.json',serialize(s));console.log(`Earned settlement: day ${getDay(s)}, ${steps} decisions, ${s.completedActions} actions, ${s.residents.length} residents, ${s.buildings.length} buildings.`);});

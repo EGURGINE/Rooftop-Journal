@@ -1,5 +1,7 @@
-import {createGame, tick, chooseEvent, startAction, getActions, getEvent, getStory, serialize, deserialize, getDay, getHour, getWeather} from './game.js';
+import {createGame, tick, chooseEvent, startAction, getActions, getEvent, getStory, getEconomy, getBuildings, selectBuilding, getResidents, assignResident, ACTION_MINUTES_PER_REAL_SECOND, serialize, deserialize, getDay, getHour, getWeather} from './game.js';
 import {createScene} from './scene.js';
+import {createAudioEngine} from './audio.js';
+import {createPanelLayout} from './panels.js';
 
 const $ = id => document.getElementById(id);
 const SAVE_KEY = 'rooftop-journal-save-v1';
@@ -36,12 +38,14 @@ let state = createGame();
 let started = false, scene, sceneFailed = false, activeTab='daily', currentEvent=null, currentEnding=null;
 let modalResume = null, modalKind=null, quality='high', view='camp', uiHidden=false;
 let actionMarkup='', lastLog='', statsMarkup='', toastTimer, lastSave=0;
-let resourceMarkup='',facilityMarkup='',weatherMarkup='',pauseMarkup='';
-let audioContext, audioGain, soundEnabled=false;
+let resourceMarkup='',facilityMarkup='',weatherMarkup='',pauseMarkup='',economyMarkup='',districtMarkup='',buildingMarkup='';
+const audio=createAudioEngine();
+const panelLayout=createPanelLayout();
+try { const volume=localStorage.getItem('rooftop-journal-volume');if(volume!==null)audio.setVolume(Number(volume)); } catch {}
 let previousFocus=null;
 let pendingResult=null,resultResume=null;
 
-function readSave(){try{return deserialize(localStorage.getItem(SAVE_KEY));}catch{return null;}}
+function readSave(){try{const raw=localStorage.getItem(SAVE_KEY),saved=deserialize(raw);if(saved){try{if(raw&&JSON.parse(raw).version<3&&!localStorage.getItem('rooftop-journal-pre-settlement'))localStorage.setItem('rooftop-journal-pre-settlement',raw);}catch{/* Backup capacity must not prevent loading an existing journal. */}}return saved;}catch{return null;}}
 function save(silent=true){
   if(!started)return;
   try{const savedPause=modalResume??resultResume??state.paused;const snapshot=!state.ending?{...state,paused:savedPause}:state;localStorage.setItem(SAVE_KEY,serialize(snapshot));$('save-status').textContent='방금 일지를 기록했습니다';lastSave=performance.now();if(!silent)toast('지금까지의 이야기를 기록했습니다.');}
@@ -63,7 +67,7 @@ function start(loaded=null){
   started=true;currentEvent=null;currentEnding=null;pendingResult=null;resultResume=null;actionMarkup='';lastLog='';
   document.body.classList.add('playing');$('welcome').hidden=true;$('game-ui').hidden=false;$('clock').hidden=false;$('ui-hint').hidden=false;$('hide-ui').hidden=false;
   if(loaded)makeScene();
-  render(true);save();
+  render(true);panelLayout.refresh();save();
   toast(loaded?'일지를 다시 펼쳤습니다. 머물렀던 순간부터 이어집니다.':'작은 옥상에서 첫날이 시작됩니다. 아래에서 오늘 할 일을 골라보세요.');
 }
 function newRun(){
@@ -74,6 +78,14 @@ function newRun(){
 
 const resourceNames={food:'식량',water:'식수',parts:'자재',medicine:'의약품'};
 const facilityNames={collector:'빗물받이',garden:'작은 텃밭',barricade:'보강된 출입문',radio:'수신기',dog:'개와 함께',ally:'이웃 윤과 연결'};
+const gearNames={blade:'정비한 무기',rope:'등반 로프',decoy:'소리 유인기',bandage:'붕대'};
+const assignmentNames={rest:'휴식',farm:'작물 관리',water:'식수 관리',guard:'경계 근무'};
+const signed=value=>`${value>=0?'+':'−'}${Math.abs(value).toFixed(1)}`;
+function renderEconomy(){
+  const economy=getEconomy(state);
+  const markup=`<div class="economy-title"><span>하루의 수지</span><small>생산 / 소비 / 순수지</small></div>${['food','water'].map(key=>{const flow=economy[key];return `<div class="economy-row ${flow.net<0?'deficit':'surplus'}"><span>${resourceNames[key]}</span><span>${flow.production.toFixed(1)} / ${flow.consumption.toFixed(1)}</span><strong>${signed(flow.net)}</strong></div>`;}).join('')}<div class="reserve-hint">${['food','water'].map(key=>`${resourceNames[key]} ${Number.isFinite(economy[key].days)&&economy[key].days!==null?`${Math.max(0,economy[key].days).toFixed(1)}일분`:'자급 중'}`).join(' · ')}</div>`;
+  if(markup!==economyMarkup){$('economy').innerHTML=markup;economyMarkup=markup;}
+}
 function render(force=false){
   if(!started)return;
   const hour=getHour(state), weather=getWeather(state);
@@ -83,7 +95,8 @@ function render(force=false){
   if(weatherSvg!==weatherMarkup){$('weather-icon').innerHTML=weatherSvg;weatherMarkup=weatherSvg;}
   $('day-progress').style.width=`${hour/24*100}%`;
   $('roof-name').textContent=state.roof.name;$('roof-floor').textContent=`아파트 ${state.roof.height}층`;
-  $('companion').textContent=`생존자 1명${state.flags.dog?' + 개 1마리':''}`;
+  $('companion').textContent=`주민 ${getResidents(state).length+1}명${state.flags.dog?' · 보리':''}`;
+  renderEconomy();
   $('seed-label').textContent=String(state.seed).slice(-4).padStart(4,'0');
   const story=getStory(state);$('story-chapter').textContent=chapterText(story.chapter);$('story-title').textContent=story.title;$('story-objective').textContent=story.objectives.find(o=>!o.done)?.label||story.summary;
   $('scene-label').textContent=`${state.roof.name} · ${state.roof.description}`;
@@ -98,11 +111,12 @@ function render(force=false){
   const facilityHtml=Object.entries(facilityNames).filter(([key])=>state.flags[key]).map(([,label])=>`<span class="facility-tag">${label}</span>`).join('');
   if(facilityMarkup!==facilityHtml){$('facilities').innerHTML=facilityHtml;facilityMarkup=facilityHtml;}
   const pauseSvg=icon(state.paused?'play':'pause');if(pauseMarkup!==pauseSvg){$('pause').innerHTML=pauseSvg;pauseMarkup=pauseSvg;}$('pause').setAttribute('aria-label',state.paused?'시간 계속 흐르기':'일시정지');
+  $('time-mode').textContent=state.event||state.paused?'이야기를 읽는 시간':state.action?`행동 중 · 1초 = ${ACTION_MINUTES_PER_REAL_SECOND*state.speed}분`:'옥상의 시간 · 1초 = 1분';
   $('pause-tag').hidden=!state.paused||!!state.event||!!state.ending||!$('modal-layer').hidden;
   document.querySelectorAll('[data-speed]').forEach(b=>b.classList.toggle('active',Number(b.dataset.speed)===state.speed));
   const thoughts=state.action?`${state.action.label} · 잠시 후 돌아옵니다.`:state.flags.dog?'혼자가 아니라는 건, 생각보다 큰 힘이다.':hour<6||hour>=19?'저 아래는 어둡지만, 여기는 불이 켜져 있다.':weather.id==='rain'?'비가 온다. 오늘은 하늘이 물을 나눠준다.':'아직, 살아갈 이유가 있다.';
   $('world-thought').textContent=thoughts;
-  if(state.action){$('current-action').hidden=false;$('action-label').textContent=state.action.label;$('action-time').textContent=`${Math.ceil(state.action.remaining/6/state.speed)}초 남음`;$('action-progress').style.width=`${100*(1-state.action.remaining/state.action.total)}%`;}
+  if(state.action){$('current-action').hidden=false;$('action-label').textContent=state.action.label;$('action-time').textContent=`${Math.ceil(state.action.remaining/ACTION_MINUTES_PER_REAL_SECOND/state.speed)}초 남음`;$('action-progress').style.width=`${100*(1-state.action.remaining/state.action.total)}%`;}
   else $('current-action').hidden=true;
   renderActions();
   const logs=state.log.slice(-35).reverse();
@@ -110,25 +124,37 @@ function render(force=false){
   if(logKey!==lastLog||force){$('journal-entries').innerHTML=logs.map(l=>`<div class="journal-entry ${escapeHTML(l.type)}"><time>${l.day===getDay(state)?escapeHTML(l.time):`D${l.day}`}</time><p>${escapeHTML(l.text)}</p></div>`).join('');lastLog=logKey;}
   if(performance.now()-lastSave>3500)$('save-status').textContent='자동으로 기록됩니다';
   renderEvent();
+  audio.setEnvironment({weather:weather.id,hour});
   if(state.ending&&currentEnding!==state.ending.id)showEnding();
 }
 function renderActions(){
   const all=getActions(state);
+  const buildings=getBuildings(state), selected=buildings.find(b=>b.selected)||buildings[0];
+  const titles={daily:'오늘은 무엇을 할까요?',outside:'누군가의 흔적을 따라서',build:'돌아올 곳을 가꾸기',residents:'함께 사는 사람들',craft:'빈손으로 내려가지 않기'};
+  $('dock-title').textContent=titles[activeTab];
+  const showDistrict=['outside','build'].includes(activeTab);
+  $('district-strip').hidden=!showDistrict;$('building-status').hidden=!showDistrict;
+  if(showDistrict){
+    const district=buildings.map(b=>`<button data-building="${escapeHTML(b.id)}" class="district-card ${b.selected?'selected':''}" ${!b.unlocked||state.action||state.event?'disabled':''} aria-pressed="${b.selected}"><strong>${escapeHTML(b.name)}</strong><small>${b.claimed?'우리 동네':b.unlocked?`${b.searched} / ${b.capacity} 수색`:'경로 미확보'}</small></button>`).join('');
+    if(district!==districtMarkup){$('district-strip').innerHTML=district;districtMarkup=district;}
+    const status=`<div><strong>${escapeHTML(selected.name)} · ${selected.height}층</strong><span>좀비 ${selected.zombiesRemaining}마리${selected.claimed?' · 옥상 확보':''}</span></div><div class="building-track"><i style="width:${selected.searched/selected.capacity*100}%"></i></div><p>${selected.searched} / ${selected.capacity}곳 수색 · ${selected.capacity-selected.searched}회 남음${selected.clueLabel?`<br>${escapeHTML(selected.clueLabel)}`:''}</p>`;
+    if(status!==buildingMarkup){$('building-status').innerHTML=status;buildingMarkup=status;}
+  }
   let markup='';
-  if(activeTab==='supplies'){
-    const heal=all.find(a=>a.id==='heal');
-    markup=`<div class="inventory-item"><strong>응급 의약품 · ${Math.floor(state.resources.medicine)}개</strong><br>상처를 돌보고 건강을 회복합니다.<button data-action="heal" ${heal?.disabled?'disabled':''} title="${escapeHTML(heal?.reason||heal?.description||'건강 회복')}">의약품 사용</button></div><div class="inventory-item"><strong>함께하는 생명</strong><br>${state.flags.dog?'개 1마리 · 식량 소모 1.5배<br>외로움과 야간 위험을 덜어줍니다.':'아직은 혼자입니다.<br>옥상 문밖의 소리에 귀 기울여보세요.'}</div>`;
+  if(activeTab==='residents'){
+    const residents=getResidents(state);
+    markup=residents.length?residents.map(person=>`<button class="resident-card" data-resident="${escapeHTML(person.id)}"><span class="resident-initial">${escapeHTML(person.name.slice(-1))}</span><div><strong>${escapeHTML(person.name)} <small>${escapeHTML(person.role)}</small></strong><p>${escapeHTML(buildings.find(b=>b.id===person.buildingId)?.name||'나의 옥상')} · ${assignmentNames[person.assignment]||'휴식'}</p><span>살 곳과 역할 정하기 ↗</span></div></button>`).join(''):'<div class="empty-state"><strong>돌아올 자리를 비워두었습니다.</strong><p>건물에서 찾은 단서를 이야기 일지에서 따라가세요.<br>구출한 사람은 주민이 되어 농사·식수·경계를 나눌 수 있습니다.</p></div>';
   }else{
-    const build=['collector','barricade','garden','radio','repair'];
-    const outside=['investigate_school','investigate_tower','investigate_river'];
-    const actions=all.filter(a=>activeTab==='build'?build.includes(a.id):activeTab==='outside'?outside.includes(a.id):!build.includes(a.id)&&!outside.includes(a.id)&&a.id!=='heal');
-    markup=actions.map(a=>{
+    const actions=all.filter(a=>activeTab==='outside'?(a.category==='outside'||['scavenge','water'].includes(a.id)):a.category===activeTab);
+    if(activeTab==='craft')markup=`<div class="gear-summary">${Object.entries(gearNames).map(([key,name])=>`<span>${name} <b>${state.gear?.[key]||0}</b></span>`).join('')}</div>`;
+    markup+=actions.map(a=>{
       const cost=typeof a.cost==='object'?Object.entries(a.cost).filter(([,v])=>v>0).map(([k,v])=>`${resourceNames[k]||k} ${v}`).join(' · '):a.cost||'';
-      const duration=a.duration?`${Math.ceil(a.duration/6/state.speed)}초`:'즉시';
-      return `<button class="action-button" data-action="${a.id}" ${a.disabled?'disabled':''} title="${escapeHTML(a.reason||a.description)}"><span class="action-icon">${icon(a.id)}</span><strong>${escapeHTML(a.label)}</strong><small>${escapeHTML(a.disabled&&a.reason?a.reason:duration)}</small>${cost?`<div class="action-cost">${escapeHTML(cost)}</div>`:''}</button>`;
+      const duration=a.duration?`${Math.ceil(a.duration/ACTION_MINUTES_PER_REAL_SECOND/state.speed)}초 · 게임 ${(a.duration/60).toFixed(1)}시간`:'즉시';
+      return `<button class="action-button" data-action="${escapeHTML(a.id)}" ${a.disabled?'disabled':''} title="${escapeHTML(a.reason||a.description)}"><span class="action-icon">${icon(a.id)}</span><strong>${escapeHTML(a.label)}</strong><small>${escapeHTML(a.disabled&&a.reason?a.reason:duration)}</small><p class="action-description">${escapeHTML(a.description)}</p>${cost?`<div class="action-cost">${escapeHTML(cost)}</div>`:''}</button>`;
     }).join('');
   }
-  $('actions').classList.toggle('build-grid',activeTab==='build');
+  $('actions').classList.toggle('build-grid',activeTab!=='residents');
+  $('actions').classList.toggle('resident-grid',activeTab==='residents');
   if(actionMarkup!==markup){$('actions').innerHTML=markup;actionMarkup=markup;}
 }
 function renderEvent(){
@@ -164,7 +190,13 @@ function closeModal(){
   $('modal-layer').hidden=true;if(modalResume!==null){state.paused=modalResume;modalResume=null;}modalKind=null;previousFocus?.focus?.();render();
 }
 function showHelp(){
-  showModal('A LITTLE FIELD GUIDE','옥상에서 살아간다는 것',`<p>물자를 모으고, 캠프를 가꾸고, 문밖의 이야기에 응답하세요. 얼마나 오래, 누구와 살아갈지는 작은 선택들이 결정합니다.</p><div class="help-row"><b>시간</b><span>현실 4분이 게임의 하루입니다. 선택지와 안내를 읽는 동안에는 멈추고, 창을 숨기거나 게임을 닫아도 물자가 줄지 않습니다.</span></div><div class="help-row"><b>생활</b><span>탐색으로 식량과 자재를, 식수 확보로 물을 얻으세요. 부족한 물자는 건강을 위협합니다.</span></div><div class="help-row"><b>캠프</b><span>빗물받이와 텃밭은 유지에 도움을 줍니다. 출입문을 보강하고 수신기를 고쳐 새로운 이야기를 만나세요.</span></div><div class="help-row"><b>이야기</b><span>동료와 이웃의 인연, 구조 신호, 탈출 준비가 서로 다른 결말로 이어집니다.</span></div><div class="help-row"><b>조작</b><span>Space 일시정지 · 1 / 2 / 3 배속 · H 풍경 보기<br>마우스로 풍경을 드래그하고 휠로 거리를 조절할 수 있습니다.</span></div><div class="help-row"><b>기록</b><span>이 브라우저에 자동 저장됩니다. 브라우저 데이터를 지우면 일지도 사라집니다.</span></div>`,started?[['이어서 살아가기',closeModal],['새 이야기',()=>showModal('START AGAIN','새로운 옥상으로 떠날까요?','<p>새 생존을 시작하면 기존 저장 기록을 덮어씁니다. 지금의 이야기는 다시 이어갈 수 없습니다.</p>',[['돌아가기',closeModal],['새 옥상 둘러보기',newRun]],'confirm')]]:[['이해했어요',closeModal]]);
+  showModal('A LITTLE FIELD GUIDE','돌아올 곳을 만드는 일',`<p>흩어진 가족과 친구를 찾아 이 옥상으로 데려오세요. 연결한 지붕과 함께하는 사람들이 늘어나면, 버티는 캠프는 살아가는 동네가 됩니다. 메인 이야기를 마친 뒤에도 생활은 계속됩니다.</p><div class="help-row"><b>시간</b><span>아무 행동이 없을 때는 현실 1초에 게임 1분, 행동 중에는 12분이 흐릅니다. 배속은 행동에만 적용됩니다. 선택과 안내를 읽을 때, 탭을 숨기거나 게임을 닫았을 때는 정지합니다.</span></div><div class="help-row"><b>탐색</b><span>건물 한 채에서 층수 × 3번 수색할 수 있습니다. 식수 수색도 이 횟수를 씁니다. 2~3마리의 좀비는 무기·유인기·로프와 기술로 돌파하세요. 물자는 무한히 나오지 않습니다.</span></div><div class="help-row"><b>새 옥상</b><span>단서로 새 경로를 열고 건물을 끝까지 수색하세요. 좀비를 모두 처리하고 옥상을 확보하면 그곳에 설비와 주민을 배치할 수 있습니다.</span></div><div class="help-row"><b>자동화</b><span>기본 설비만으로 자급하기는 어렵습니다. 설비를 개선하고 전력과 기술을 확보한 뒤 주민의 역할을 정하세요. 왼쪽의 하루 수지로 식량과 식수의 부족량을 확인할 수 있습니다. 주민이 늘면 소비도 늘어납니다.</span></div><div class="help-row"><b>음악</b><span>상단 ♫로 오리지널 로파이 ‘옥상에 남은 오후’를 켭니다. 환경음은 옆 스피커로 별도 조절하며 외부 음원·샘플은 사용하지 않습니다.</span></div><div class="help-row"><b>조작</b><span>Space 일시정지 · 1 / 2 / 3 행동 배속 · H 풍경 보기<br>드래그로 회전, 휠로 거리를 조절합니다.</span></div><div class="help-row"><b>기록</b><span>이 브라우저에 자동 저장됩니다. 이전 버전 기록은 새 정착 시스템으로 이전하며, 원본 기록도 별도로 보관합니다.</span></div>`,started?[['이어서 살아가기',closeModal],['새 이야기',()=>showModal('START AGAIN','새로운 옥상으로 떠날까요?','<p>새 생존을 시작하면 현재 저장 기록을 덮어씁니다. 지금의 동네로 돌아오려면 취소해주세요.</p>',[['돌아가기',closeModal],['새 옥상 둘러보기',newRun]],'confirm')]]:[['이해했어요',closeModal]]);
+}
+function showResident(id){
+  const person=getResidents(state).find(p=>p.id===id);if(!person)return;
+  const roofs=getBuildings(state).filter(b=>b.claimed);
+  const body=`<p>${escapeHTML(person.description)}</p><label class="assignment-label" for="resident-roof">살 곳</label><select id="resident-roof">${roofs.map(b=>`<option value="${escapeHTML(b.id)}" ${b.id===person.buildingId?'selected':''}>${escapeHTML(b.name)} · ${b.height}층</option>`).join('')}</select><label class="assignment-label" for="resident-job">함께 맡을 일</label><select id="resident-job">${Object.entries(assignmentNames).map(([key,name])=>`<option value="${key}" ${key===person.assignment?'selected':''}>${name}</option>`).join('')}</select><p class="assignment-note">작물·식수 담당은 해당 설비가 있는 옥상에서 일합니다. 경계 근무는 동네의 방어를 돕습니다. 일을 맡겨도 주민의 식량과 물 소비는 계속됩니다.</p><div id="assignment-feedback" role="status"></div>`;
+  showModal(`${escapeHTML(person.role)} · OUR NEIGHBORS`,`${person.name}의 하루`,body,[['이대로 배치하기',()=>{const result=assignResident(state,id,$('resident-roof').value,$('resident-job').value);if(!result.ok){$('assignment-feedback').textContent=result.reason;return;}save();closeModal();toast(`${person.name}의 살 곳과 역할을 정했습니다.`);}],['돌아가기',closeModal]],'resident');
 }
 function showStory(){
   const story=getStory(state);
@@ -177,27 +209,28 @@ function showEnding(){
 }
 function setUIHidden(hidden){uiHidden=hidden;document.body.classList.toggle('ui-hidden',hidden);$('show-ui').hidden=!hidden;}
 
-// Sound is synthesized locally and starts only after an explicit click.
-function toggleSound(){
-  if(!audioContext){
-    try{
-      audioContext=new (window.AudioContext||window.webkitAudioContext)();audioGain=audioContext.createGain();audioGain.gain.value=0;audioGain.connect(audioContext.destination);
-      const len=audioContext.sampleRate*3, buffer=audioContext.createBuffer(1,len,audioContext.sampleRate), data=buffer.getChannelData(0);let last=0;
-      for(let i=0;i<len;i++){last=(last+.02*(Math.random()*2-1))/1.02;data[i]=last*3;}
-      const noise=audioContext.createBufferSource();noise.buffer=buffer;noise.loop=true;const filter=audioContext.createBiquadFilter();filter.type='lowpass';filter.frequency.value=650;noise.connect(filter);filter.connect(audioGain);noise.start();
-    }catch{toast('이 브라우저에서는 환경음을 재생할 수 없습니다.');return;}
-  }
-  soundEnabled=!soundEnabled;if(soundEnabled)audioContext.resume();audioGain.gain.setTargetAtTime(soundEnabled?.14:0,audioContext.currentTime,.5);
-  $('sound').innerHTML=icon(soundEnabled?'sound':'mute');$('sound').setAttribute('aria-label',soundEnabled?'환경음 끄기':'환경음 켜기');$('sound').title=soundEnabled?'환경음 끄기':'환경음 켜기';
+function renderAudio(){
+  const settings=audio.getState();
+  $('sound').innerHTML=icon(settings.ambientEnabled?'sound':'mute');
+  $('sound').setAttribute('aria-label',settings.ambientEnabled?'환경음 끄기':'환경음 켜기');
+  $('sound').title=settings.ambientEnabled?'환경음 끄기':'환경음 켜기';
+  $('music').classList.toggle('on',settings.musicEnabled);$('music').setAttribute('aria-pressed',String(settings.musicEnabled));
+  $('music').setAttribute('aria-label',settings.musicEnabled?'로파이 음악 끄기':'로파이 음악 켜기');
+  $('music').title=`${settings.trackTitle} · ${settings.musicEnabled?'재생 중':'클릭해서 재생'}`;
+  $('music-volume').value=Math.round(settings.volume*100);
 }
+async function toggleAudio(kind){try{const settings=audio.getState();if(kind==='music')await audio.setMusicEnabled(!settings.musicEnabled);else await audio.setAmbientEnabled(!settings.ambientEnabled);renderAudio();if(!audio.getState().available)toast('이 브라우저에서는 소리를 재생할 수 없습니다.');else if(kind==='music'&&audio.getState().musicEnabled)toast('♫ 옥상에 남은 오후 · 오리지널 로파이');}catch{toast('소리를 재생하지 못했습니다. 다시 눌러주세요.');}}
 function pause(){if(!started||state.event||state.ending||!$('modal-layer').hidden)return;state.paused=!state.paused;render();save();}
 
-$('sound').innerHTML=icon('mute');$('quality').innerHTML=icon('quality');$('help').innerHTML=icon('help');$('save').innerHTML=icon('save');
+renderAudio();$('quality').innerHTML=icon('quality');$('help').innerHTML=icon('help');$('save').innerHTML=icon('save');
 $('start').addEventListener('click',()=>{if(readSave())showModal('A NEW CHAPTER','새 일지를 시작할까요?','<p>새 생존을 시작하면 이전 일지를 덮어씁니다. 지난 이야기를 이어가려면 돌아가서 이어 쓰기를 선택해주세요.</p>',[['돌아가기',closeModal],['새 생존 시작',()=>{closeModal();start();}]],'confirm');else start();});$('continue').addEventListener('click',()=>{const saved=readSave();if(saved)start(saved);else toast('이어서 쓸 수 있는 일지가 없습니다.');});
 $('reroll').addEventListener('click',()=>{state=createGame();preview();});
 $('save').addEventListener('click',()=>save(false));$('pause').addEventListener('click',pause);
 $('story-open').addEventListener('click',showStory);
-$('sound').addEventListener('click',toggleSound);$('help').addEventListener('click',showHelp);$('brand').addEventListener('click',e=>{e.preventDefault();showHelp();});
+$('sound').addEventListener('click',()=>toggleAudio('ambient'));$('music').addEventListener('click',()=>toggleAudio('music'));
+$('reset-layout').addEventListener('click',()=>{panelLayout.reset();toast('상태창·오늘의 기록·행동 창을 기본 배치로 돌렸습니다.');});
+$('music-volume').addEventListener('input',()=>{audio.setVolume(Number($('music-volume').value)/100);try{localStorage.setItem('rooftop-journal-volume',audio.getState().volume);}catch{}});
+$('help').addEventListener('click',showHelp);$('brand').addEventListener('click',e=>{e.preventDefault();showHelp();});
 $('quality').addEventListener('click',()=>{quality=quality==='high'?'low':'high';scene?.setQuality(quality);$('quality').title=`그래픽 품질: ${quality==='high'?'높음':'가벼움'}`;toast(quality==='high'?'그래픽 품질을 높였습니다.':'가벼운 그래픽으로 전환했습니다.');});
 $('view').addEventListener('click',()=>{view=view==='camp'?'wide':'camp';scene?.setView(view);$('view').textContent=view==='camp'?'풍경 넓게 보기 ↗':'캠프 가까이 보기 ↙';});
 $('hide-ui').addEventListener('click',()=>setUIHidden(true));$('show-ui').addEventListener('click',()=>setUIHidden(false));
@@ -205,7 +238,8 @@ $('journal-toggle').addEventListener('click',()=>{$('journal-toggle').parentElem
 $('modal-close').addEventListener('click',closeModal);
 document.querySelectorAll('[data-speed]').forEach(b=>b.addEventListener('click',()=>{state.speed=Number(b.dataset.speed);render();save();}));
 document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{activeTab=b.dataset.tab;document.querySelectorAll('[data-tab]').forEach(t=>t.setAttribute('aria-selected',String(t===b)));actionMarkup='';renderActions();}));
-$('actions').addEventListener('click',event=>{const b=event.target.closest('[data-action]');if(!b||b.disabled)return;const result=startAction(state,b.dataset.action);if(result?.ok===false)toast(result.reason||'지금은 할 수 없는 행동입니다.');else toast(`${b.dataset.action==='heal'?'상처를 돌봅니다.':'오늘 할 일을 시작했습니다.'}`);render(true);save();});
+$('district-strip').addEventListener('click',event=>{const b=event.target.closest('[data-building]');if(!b||b.disabled)return;const result=selectBuilding(state,b.dataset.building);if(!result.ok){toast(result.reason);return;}scene?.setFocus?.(b.dataset.building);actionMarkup='';render(true);save();});
+$('actions').addEventListener('click',event=>{const resident=event.target.closest('[data-resident]');if(resident){showResident(resident.dataset.resident);return;}const b=event.target.closest('[data-action]');if(!b||b.disabled)return;const result=startAction(state,b.dataset.action);if(result?.ok===false)toast(result.reason||'지금은 할 수 없는 행동입니다.');else{state.paused=false;toast(`${b.dataset.action==='heal'?'상처를 돌봅니다.':'오늘 할 일을 시작했습니다.'}`);}render(true);save();});
 $('event-choices').addEventListener('click',event=>{
   if(event.target.closest('[data-result]')){pendingResult=null;state.paused=resultResume??false;resultResume=null;currentEvent=null;$('event-layer').hidden=true;render(true);save();$('story-open').focus();return;}
   const b=event.target.closest('[data-choice]');if(!b||b.disabled)return;
@@ -217,20 +251,20 @@ $('event-choices').addEventListener('click',event=>{
   render(true);save();
 });
 document.addEventListener('keydown',e=>{
-  if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;
   const dialog=!$('modal-layer').hidden?$('modal-layer'):!$('event-layer').hidden?$('event-layer'):null;
   if(dialog&&e.key==='Tab'){
-    const els=[...dialog.querySelectorAll('button:not(:disabled):not([hidden])')];const first=els[0],last=els.at(-1);
+    const els=[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]')].filter(el=>!el.hidden&&el.getClientRects().length);const first=els[0],last=els.at(-1);
     if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}return;
   }
   if(e.key==='Escape'&&modalKind&&modalKind!=='ending'){closeModal();return;}
   if(dialog)return;
+  if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;
   if(e.code==='Space'&&!e.target.closest('button,a,[role="button"]')){e.preventDefault();pause();}
   if(e.key.toLowerCase()==='h'&&started)setUIHidden(!uiHidden);
   if(started&&['1','2','3'].includes(e.key)){state.speed={'1':1,'2':2,'3':4}[e.key];render();save();}
 });
 window.addEventListener('pagehide',()=>save());
-document.addEventListener('visibilitychange',()=>{previousFrame=performance.now();if(document.hidden){save();if(audioContext)audioContext.suspend();}else if(soundEnabled)audioContext?.resume();});
+document.addEventListener('visibilitychange',()=>{previousFrame=performance.now();if(document.hidden)save();audio.setHidden(document.hidden);});
 window.addEventListener('resize',()=>scene?.resize());
 let previousFrame=performance.now(),lastRender=0;
 function frame(now){

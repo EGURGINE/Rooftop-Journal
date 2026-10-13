@@ -1,9 +1,9 @@
 {
   "name": "rooftop-journal",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "옥상일지 — 좀비 아포칼립스 옥상 생존 게임",
+  "description": "옥상일지 — 사람을 되찾고 옥상 동네를 가꾸는 생존 게임",
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",

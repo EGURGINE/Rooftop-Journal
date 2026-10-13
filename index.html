@@ -8,6 +8,7 @@
   <title>옥상일지 · 지붕 위에 남은 하루</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%233c5145'/%3E%3Cpath d='M10 45L32 14L54 45ZM32 14V45' fill='none' stroke='%23ede8d5' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./panel-layout.css">
 </head>
 <body>
   <div id="world" aria-label="폐허가 된 도시와 옥상 캠프의 입체 풍경"></div>
@@ -26,8 +27,11 @@
       <div class="day-track"><i id="day-progress"></i></div>
     </div>
     <nav class="top-tools" aria-label="화면 설정">
+      <button class="icon-button music-button" id="music" title="로파이 · 옥상에 남은 오후" aria-label="로파이 음악 켜기">♫</button>
+      <input id="music-volume" class="music-volume" type="range" min="0" max="100" value="55" step="5" aria-label="소리 음량" title="소리 음량">
       <button class="icon-button" id="sound" title="환경음 켜기" aria-label="환경음 켜기"></button>
       <button class="icon-button" id="quality" title="그래픽 품질: 높음" aria-label="그래픽 품질 변경"></button>
+      <button class="icon-button" id="reset-layout" title="창 배치 초기화" aria-label="창 배치 초기화">↺</button>
       <button class="icon-button" id="help" title="플레이 안내" aria-label="플레이 안내"></button>
     </nav>
   </header>
@@ -35,11 +39,11 @@
   <main id="welcome" class="welcome">
     <div class="eyebrow"><i></i> 무너진 도시에서, 이어지는 삶</div>
     <h1>도시는 멈췄고,<br>오늘도 <em>살아간다.</em></h1>
-    <p class="intro">세상이 끝나도 하루는 시작됩니다.<br>이 작은 옥상에 불을 피우고,<br>당신만의 생존 일지를 써 내려가세요.</p>
+    <p class="intro">흩어진 사람들의 흔적을 찾아,<br>돌아올 곳에 불을 켜두세요.<br>하나의 옥상이, 우리의 동네가 될 때까지.</p>
     <div class="start-roof"><span class="tiny-label">이번 이야기의 시작</span><div><strong id="preview-roof">옥상을 찾고 있습니다</strong><button id="reroll" class="text-button" title="다른 옥상 둘러보기">다른 옥상 ↻</button></div><p id="preview-description"></p></div>
     <button class="primary-button" id="start">이곳에서 살아가기 <span>↗</span></button>
     <button class="continue-button" id="continue" hidden>지난 일지 이어 쓰기 <span>→</span></button>
-    <p class="welcome-note">하루는 약 4분 · 선택할 때는 잠시 멈춥니다</p>
+    <p class="welcome-note">평상시 1초 = 1분 · 행동할 때 빠르게 · 선택할 때 정지</p>
   </main>
 
   <div id="game-ui" hidden>
@@ -49,6 +53,7 @@
       <div class="roof-sub"><span id="roof-floor"></span><span id="companion">생존자 1명</span></div>
       <div class="section-rule"><span>오늘을 버틸 것들</span></div>
       <div id="resources" class="resources"></div>
+      <div id="economy" class="economy" aria-label="하루 생산과 소비"></div>
       <div class="section-rule"><span>몸과 마음</span></div>
       <div id="stats" class="stats"></div>
       <div id="facilities" class="facility-list"></div>
@@ -56,6 +61,7 @@
     </aside>
 
     <div class="world-caption"><span class="coordinate">SEOUL · SAFEHOUSE <span id="seed-label"></span></span><p id="world-thought">아직, 살아갈 이유가 있다.</p></div>
+    <div id="time-mode" class="time-mode">옥상의 시간 · 1초 = 1분</div>
     <div id="pause-tag" class="pause-tag" hidden>잠시 쉬어가는 중</div>
     <button id="story-open" class="story-peek" aria-label="이야기와 단서 펼치기"><span id="story-chapter">첫 번째 장</span><strong id="story-title">아직 끝나지 않은 이야기</strong><p id="story-objective">작은 신호에 귀 기울여보세요.</p><small>이야기 · 능력 · 단서 펼치기 ↗</small></button>
 
@@ -65,14 +71,16 @@
     </section>
 
     <section class="action-dock paper" aria-label="캠프에서 할 일">
-      <div class="dock-header"><div><span class="eyebrow small">작은 행동이 내일을 바꿉니다</span><h2>무엇을 할까요?</h2></div><div class="time-controls"><button id="pause" title="일시정지 (Space)" aria-label="일시정지"></button><button data-speed="1" class="active">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button></div></div>
-      <div class="action-tabs" role="tablist" aria-label="행동 종류"><button role="tab" aria-selected="true" data-tab="daily">생활</button><button role="tab" aria-selected="false" data-tab="outside">바깥 탐색</button><button role="tab" aria-selected="false" data-tab="build">캠프 가꾸기</button><button role="tab" aria-selected="false" data-tab="supplies">소지품</button></div>
+      <div class="dock-header"><div><span class="eyebrow small" id="dock-eyebrow">돌아올 곳을 가꾸는 하루</span><h2 id="dock-title">오늘은 무엇을 할까요?</h2></div><div class="time-controls" aria-label="행동 진행 배속"><button id="pause" title="일시정지 (Space)" aria-label="일시정지"></button><button data-speed="1" class="active" title="행동 1배속">1×</button><button data-speed="2" title="행동 2배속">2×</button><button data-speed="4" title="행동 4배속">4×</button></div></div>
+      <div class="action-tabs" role="tablist" aria-label="행동 종류"><button role="tab" aria-selected="true" data-tab="daily">생활</button><button role="tab" aria-selected="false" data-tab="outside">건물 탐색</button><button role="tab" aria-selected="false" data-tab="build">옥상 설비</button><button role="tab" aria-selected="false" data-tab="residents">주민</button><button role="tab" aria-selected="false" data-tab="craft">장비</button></div>
+      <div id="district-strip" class="district-strip" hidden aria-label="탐색할 건물"></div>
+      <div id="building-status" class="building-status" hidden></div>
       <div id="actions" class="actions"></div>
       <div id="current-action" class="current-action" hidden><div><span id="action-label"></span><span id="action-time"></span></div><div class="action-track"><i id="action-progress"></i></div></div>
     </section>
   </div>
 
-  <footer class="scene-footer"><span id="scene-label">지붕 위에 남은 하루</span><div><span id="ui-hint" hidden>SPACE 일시정지</span><button id="view">풍경 넓게 보기 ↗</button><button id="hide-ui" hidden>풍경만 보기</button></div><span class="version">VOL. 01 / EARLY DAYS</span></footer>
+  <footer class="scene-footer"><span id="scene-label">지붕 위에 남은 하루</span><div><span id="ui-hint" hidden>SPACE 일시정지 · 창의 손잡이로 이동 / 모서리로 크기 조절</span><button id="view">풍경 넓게 보기 ↗</button><button id="hide-ui" hidden>풍경만 보기</button></div><span class="version">VOL. 03 / OUR NEIGHBORHOOD</span></footer>
   <button id="show-ui" hidden>일지로 돌아오기 <span>H</span></button>
   <div id="toast" class="toast" role="status" hidden></div>
 

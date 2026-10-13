@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><title>옥상일지 개발 검증</title>
+<style>body{background:#293e35;color:#eee8d4;font:15px 'Malgun Gothic',sans-serif;max-width:650px;padding:60px;margin:auto;line-height:1.8}button,a{background:#e9e4d3;color:#314837;border:0;padding:15px;display:block;margin:12px 0;font:inherit;cursor:pointer;text-decoration:none}small{color:#b4c2a7}pre{white-space:pre-wrap}</style>
+<h1>개발 검증용 저장</h1><p>이 페이지는 배포에 포함되지 않습니다. 검증 전용 포트 4174의 저장에만 적용됩니다.</p>
+<button id="new">고정 시드의 새 정착 시작</button><button id="earned">실제 진행 검증을 통과한 동네 불러오기</button><button id="legacy">v0.2 기록 이전 검증</button><a href="/">게임 화면 열기</a><pre id="status" role="status"></pre>
+<script type="module">
+import {createGame,serialize} from '../src/game.js';
+const status=document.querySelector('#status');
+function write(state){if(location.hostname!=='127.0.0.1'||location.port!=='4174')throw Error('검증 전용 주소에서만 사용할 수 있습니다.');state.paused=true;localStorage.setItem('rooftop-journal-save-v1',serialize(state));status.textContent=`검증 기록 준비: v${state.version}, ${state.residents?.length||0}명. 게임 화면에서 ‘지난 일지 이어 쓰기’를 누르세요.`;}
+document.querySelector('#new').onclick=()=>{write(createGame(777777));};
+document.querySelector('#earned').onclick=async()=>{try{const response=await fetch('../artifacts/settlement-qa.json');if(!response.ok)throw Error('진행 검증 기록이 아직 준비되지 않았습니다.');write(await response.json());}catch(error){status.textContent=error.message;}};
+document.querySelector('#legacy').onclick=()=>{const state=createGame(434392);Object.assign(state,{version:2,time:27360,resources:{food:128,water:78,parts:50,medicine:4},stats:{health:82,morale:100,defense:99},flags:{collector:true,garden:true,barricade:true,radio:true,dog:true,ally:true,trusted:true,sisterSaved:true},ending:{id:'departure',title:'강 건너의 아침',day:20},action:null,event:null});write(state);};
+</script></html>
