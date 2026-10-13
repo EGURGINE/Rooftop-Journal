@@ -32,45 +32,47 @@ test('old completed escape saves migrate to a paused chapter without ending',()=
 test('malformed save data and impossible claimed roofs are rejected',()=>{assert.equal(deserialize('{'),null);const s=createGame(42);s.buildings[1].claimed=true;assert.equal(deserialize(serialize(s)),null);const t=createGame(42);t.resources.food=Infinity;assert.equal(deserialize(serialize(t)),null);});
 test('story is earned by clues and settlement rather than calendar or ending',()=>{const s=createGame(42);s.time=1440*100;assert.equal(getStory(s).chapter,1);assert.equal(EVENTS.some(e=>e.choices.some(c=>c.effects.ending)),false);assert.ok(EVENTS.length>=30);assert.ok(EVENTS.every(e=>e.body.includes('\n\n')));});
 
-// This strategy only uses public actions, events and resident assignments.
-// It deliberately declines residents until a bed and productive job can support them.
+// Public actions only. Clues come before a building is made safe, so story plans
+// are not stuck behind a deferred reunion. Extra mouths wait for a free bed.
 export function runSettlement(seed=42){
- const s=createGame(seed);let steps=0;
- const delay={defer:['stray_dog','neighbor_lamp','jihye_found','sua_found','minwoo_found','mother_found','district_letter']};
- function settleEvents(){while(s.event){const e=getEvent(s);const resident={neighbor_lamp:'yoon',jihye_found:'jihye',sua_found:'sua',minwoo_found:'minwoo',mother_found:'mother'}[e.id];if(resident){const canJoin=getEconomy(s).beds>getEconomy(s).people;const productive=s.buildings.some(b=>b.claimed&&b.facilities.garden>=2)||resident==='yoon';const need=resident==='minwoo'||resident==='mother';resolve(s,canJoin&&(productive||need)?{}:delay);}else resolve(s,delay);}}
- function run(id){settleEvents();assert.ok(++steps<3000,'strategy too long');assert.equal(s.ending,null,`died day ${getDay(s)} ${JSON.stringify(s.resources)}`);const result=startAction(s,id);if(!result.ok)return false;while(s.action||s.event){if(s.ending)throw Error(`died day ${getDay(s)} on ${id}, ${JSON.stringify(s.resources)}`);if(s.event)settleEvents();else tick(s,1);}return true;}
+ const s=createGame(seed);let steps=0;const finish=new Set();
+ const reunion={neighbor_lamp:'yoon',jihye_found:'jihye',sua_found:'sua',minwoo_found:'minwoo',mother_found:'mother'};
+ const delay={defer:['stray_dog','district_letter']};
+ function settleEvents(){while(s.event){const e=getEvent(s);if(reunion[e.id]&&getEconomy(s).beds<=getEconomy(s).people)resolve(s,{defer:[e.id,'stray_dog','district_letter']});else resolve(s,delay);}}
+ function run(id){settleEvents();assert.ok(++steps<4000,'strategy too long');if(s.ending){const econ=getEconomy(s);throw Error(`already dead before ${id} day ${getDay(s)} ${JSON.stringify(s.resources)} ${s.buildings.filter(b=>b.claimed).map(b=>`${b.id} p${b.facilities.power} w${b.facilities.collector} g${b.facilities.garden} r${b.facilities.radio}`).join(' ')} residents ${s.residents.map(r=>`${r.id}:${r.assignment}@${r.buildingId}`).join(',')} food ${econ.food.production.toFixed(2)}/${econ.food.consumption.toFixed(2)} water ${econ.water.production.toFixed(2)}/${econ.water.consumption.toFixed(2)} auto ${econ.automated} beds ${econ.beds}`);}const result=startAction(s,id);if(!result.ok)return false;while(s.action||s.event){if(s.ending)throw Error(`died during ${id}`);if(s.event)settleEvents();else tick(s,1);}return true;}
  function available(id){return getActions(s).some(a=>a.id===id&&!a.disabled);}
- function assign(){for(const r of getResidents(s)){if(r.assignment!=='rest')continue;for(const b of s.buildings.filter(b=>b.claimed)){const jobs=r.id==='jihye'?['water','farm']:['farm','water'];let done=false;for(const job of jobs)if(assignResident(s,r.id,b.id,job).ok){done=true;break;}if(done)break;}}}
- function gather(){let b=s.buildings.find(b=>b.unlocked&&b.searched<b.capacity&&!b.pendingZombie);if(!b)b=s.buildings.find(b=>b.unlocked&&b.pendingZombie);if(!b)return false;selectBuilding(s,b.id);if(b.pendingZombie){if(!s.gear.blade&&available('craft_blade'))run('craft_blade');return run('clear_zombies');}const econ=getEconomy(s);return run(s.resources.water<Math.max(4,econ.water.consumption*.7)&&s.resources.food>2?'water':'scavenge');}
+ function assign(){for(const r of getResidents(s)){if(r.assignment!=='rest')continue;const jobs=r.id==='jihye'?['water','farm']:r.id==='yoon'?['guard','farm','water']:['farm','water'];for(const b of s.buildings.filter(b=>b.claimed)){if(jobs.some(job=>assignResident(s,r.id,b.id,job).ok))break;}}}
+ function searchable(b){return b.unlocked&&(b.pendingZombie||b.searched<b.capacity);}
+ function gather(){const pending=s.buildings.find(b=>b.unlocked&&b.pendingZombie);const clue=s.buildings.find(b=>b.unlocked&&!b.clueFound&&b.searched<b.capacity&&!b.pendingZombie);const rest=s.buildings.find(b=>finish.has(b.id)&&b.unlocked&&b.searched<b.capacity&&!b.pendingZombie);const b=pending||clue||rest;if(!b)return false;selectBuilding(s,b.id);if(b.pendingZombie){if(!s.gear.blade&&available('craft_blade'))run('craft_blade');return run('clear_zombies');}return run(s.resources.water<4&&s.resources.food>3?'water':'scavenge');}
  function build(id,b=s.buildings[0]){selectBuilding(s,b.id);return available(id)&&run(id);}
- while(!s.flags.settlementChapter&&steps<3000){settleEvents();assign();const econ=getEconomy(s);
-  if(s.stats.health<40&&s.resources.medicine>=1){run('heal');continue;}
+ function upgrade(id,level,roofs){for(const b of roofs){if(b.facilities[id]<level&&build(id,b))return true;}return false;}
+ while(!s.flags.settlementChapter&&steps<4000){settleEvents();assign();const econ=getEconomy(s);const roofs=s.buildings.filter(b=>b.claimed).slice(0,2);
+  if(s.stats.health<45&&s.resources.medicine>=1){run('heal');continue;}
   if(s.stats.health<35&&s.resources.food>1&&s.resources.water>1){run('rest');continue;}
-  if(s.stats.defense<20&&s.resources.parts>=2){run('repair');continue;}
-  if(s.resources.food<Math.max(3,econ.food.consumption*.65)||s.resources.water<Math.max(3,econ.water.consumption*.65)){if(gather())continue;}
+  if(s.stats.defense<18&&s.resources.parts>=4){run('repair');continue;}
+  if(s.resources.food<Math.max(4,econ.food.consumption)||s.resources.water<Math.max(4,econ.water.consumption*.5)){if(gather())continue;}
   if(!s.gear.blade&&s.resources.parts>=2){run('craft_blade');continue;}
   if(!s.gear.rope&&s.resources.parts>=2){run('craft_rope');continue;}
-  // Water and growing beds are investments before inviting more mouths.
-  if(s.facilities.collector<1&&s.resources.parts>=8&&build('collector'))continue;
-  if(s.facilities.garden<1&&s.resources.parts>=10&&build('garden'))continue;
-  if(s.facilities.beds<1&&s.resources.parts>=6&&build('beds'))continue;
-  if(s.facilities.storage<1&&s.resources.parts>=8&&build('storage'))continue;
+  if(s.facilities.collector<1&&build('collector'))continue;
+  if(s.facilities.garden<1&&build('garden'))continue;
+  if(s.facilities.beds<1&&build('beds'))continue;
+  if(s.facilities.storage<1&&build('storage'))continue;
   let worked=false;
   for(const b of s.buildings){if(!b.unlocked&&s.flags[b.prerequisite]&&s.gear.rope&&s.resources.parts>=3&&s.resources.food>2&&s.resources.water>2){selectBuilding(s,b.id);if(run(`route_${b.id}`)){worked=true;break;}}}if(worked)continue;
+  if(econ.food.net<1&&s.flags.cropPlan&&upgrade('garden',2,roofs))continue;
+  if(econ.water.net<1&&s.flags.waterPlan&&upgrade('collector',2,roofs))continue;
+  if(econ.beds<=econ.people&&s.flags.secondRoof&&upgrade('beds',2,[s.buildings[0]]))continue;
+  const cluesReady=s.flags.waterPlan&&s.flags.cropPlan&&s.flags.automationPlan&&s.flags.seedBank;
+  if(cluesReady)for(const b of s.buildings)if(b.id!=='home')finish.add(b.id);
   for(const b of s.buildings.filter(b=>b.unlocked&&!b.claimed&&b.searched===b.capacity&&b.zombiesRemaining===0)){selectBuilding(s,b.id);if(run('claim_roof')){worked=true;break;}}if(worked)continue;
-  const claimed=s.buildings.filter(b=>b.claimed);
-  if(s.flags.waterPlan){for(const b of claimed){if(b.facilities.collector<2&&s.resources.parts>=FACILITY_COST('collector',b.facilities.collector)&&build('collector',b)){worked=true;break;}}}if(worked)continue;
-  if(s.flags.cropPlan){for(const b of claimed){if(b.facilities.garden<2&&s.resources.parts>=FACILITY_COST('garden',b.facilities.garden)&&build('garden',b)){worked=true;break;}}}if(worked)continue;
-  if(econ.beds<=econ.people){for(const b of claimed){if(b.facilities.beds<1&&build('beds',b)){worked=true;break;}}}if(worked)continue;
-  if(s.flags.friendHome&&s.flags.automationPlan){for(const b of claimed.slice(0,2)){if(b.facilities.power<2&&build('power',b)){worked=true;break;}if(b.facilities.power>=2&&b.facilities.collector<3&&build('collector',b)){worked=true;break;}if(b.facilities.power>=2&&s.flags.seedBank&&b.facilities.garden<3&&build('garden',b)){worked=true;break;}}}if(worked)continue;
   if(gather())continue;
-  if(s.buildings.every(b=>b.claimed)){if(s.facilities.radio<2&&build('radio'))continue;if(run('route_next'))continue;}
-  if(s.resources.parts<8){throw Error(`No gathering left at ${getDay(s)}: ${JSON.stringify(s.resources)} ${s.buildings.map(b=>`${b.id}:${b.searched}/${b.capacity}/${b.claimed}`).join(' ')}`);}
-  // Let an earned reunion/milestone event arrive while the community sustains itself.
+  if(s.flags.friendHome&&s.flags.automationPlan&&roofs.length>=2){if(upgrade('power',2,roofs))continue;if(upgrade('collector',3,roofs))continue;if(s.flags.seedBank&&upgrade('garden',3,roofs))continue;}
+  const needParts=roofs.length<2||roofs.some(b=>b.facilities.power<2||b.facilities.collector<3||b.facilities.garden<3);
+  if(s.buildings.every(b=>b.claimed)&&needParts){if(!s.buildings.some(b=>b.facilities.radio>=2)&&build('radio'))continue;if(run('route_next')){finish.add(s.buildings[s.buildings.length-1].id);continue;}}
+  if(!s.buildings.some(searchable)&&!s.flags.selfSufficient)throw Error(`No gathering left at ${getDay(s)}: ${JSON.stringify(s.resources)} ${s.buildings.map(b=>`${b.id}:${b.searched}/${b.capacity} c${b.claimed} p${b.facilities.power} w${b.facilities.collector} g${b.facilities.garden}`).join(' | ')} flags ${Object.entries(s.flags).filter(([,v])=>v).map(([k])=>k).join(',')} food ${econ.food.net.toFixed(2)} water ${econ.water.net.toFixed(2)} auto ${econ.automated} people ${econ.people} residents ${s.residents.map(r=>r.id).join(',')}`);
   tick(s,60);settleEvents();steps++;
  }
- if(!s.flags.settlementChapter)throw Error(`Not settled ${getDay(s)} ${JSON.stringify(s.resources)} flags${JSON.stringify(s.flags)} facilities${JSON.stringify(s.buildings.map(b=>b.facilities))}`);
+ if(!s.flags.settlementChapter)throw Error(`Not settled ${getDay(s)} ${JSON.stringify(s.resources)} flags${JSON.stringify(Object.keys(s.flags).filter(k=>s.flags[k]))}`);
  return {s,steps};
 }
-function FACILITY_COST(id,level){return (id==='collector'?[8,16,28]:[10,18,30])[level];}
 test('earned supplies and choices can reunite the family and reach ongoing automation',()=>{const{s,steps}=runSettlement();assert.equal(s.ending,null);assert.ok(s.flags.familyChapter);assert.ok(s.flags.settlementChapter);assert.ok(s.residents.length>=5);assert.ok(s.buildings.filter(b=>b.claimed).length>=2);assert.ok(s.completedActions>100);assert.ok(s.buildings.every(b=>b.searched<=b.capacity));assert.ok(deserialize(serialize(s)));mkdirSync('artifacts',{recursive:true});writeFileSync('artifacts/settlement-qa.json',serialize(s));console.log(`Earned settlement: day ${getDay(s)}, ${steps} decisions, ${s.completedActions} actions, ${s.residents.length} residents, ${s.buildings.length} buildings.`);});

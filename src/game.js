@@ -56,7 +56,7 @@ export function assignResident(s,id,buildingId,assignment){
 }
 
 export function getEconomy(s){
- const people=1+s.residents.length,claimed=s.buildings.filter(b=>b.claimed);let food=0,water=0,irrigation=0,upkeep=0,beds=0,foodCapacity=12,waterCapacity=18,guards=0,automated=0;
+ const people=1+s.residents.length,claimed=s.buildings.filter(b=>b.claimed);let food=0,water=0,irrigation=0,upkeep=0,salvage=0,beds=0,foodCapacity=12,waterCapacity=18,guards=0,automated=0;
  const rain=getWeather(s).id==='rain',powered=s.resources.parts>0;
  for(const b of claimed){const f=b.facilities;const farmer=s.residents.find(r=>r.buildingId===b.id&&r.assignment==='farm'),keeper=s.residents.find(r=>r.buildingId===b.id&&r.assignment==='water'),guard=s.residents.find(r=>r.buildingId===b.id&&r.assignment==='guard');
   const auto=f.power>=2&&powered,gl=f.garden===3&&!auto?2:f.garden,wl=f.collector===3&&!auto?2:f.collector;
@@ -64,14 +64,14 @@ export function getEconomy(s){
   food+=growth*(b.id==='home'&&s.roof.type==='garden'?1.15:1);
   water+=([0,rain?1.8:.55,rain?4.8:2.3,7.8][wl]+(keeper?[0,1.7,3.2,4.4][wl]*(keeper.id==='jihye'?1.2:1):0))*(b.id==='home'&&s.roof.type==='utility'?1.15:1);
   irrigation+=f.garden?[0,.35,.7,1][gl]:0;
-  upkeep+=f.power*.10+(f.collector===3?.18:0)+(f.garden===3?.18:0)+f.barricade*.025;
+  const maintenance=f.power*.10+(f.collector===3?.18:0)+(f.garden===3?.18:0)+f.barricade*.025;upkeep+=maintenance;
   beds+=housing(b);foodCapacity+=f.storage*10+(b.id==='home'?0:4);waterCapacity+=f.storage*14+(b.id==='home'?0:6);
-  if(guard)guards+=guard.id==='yoon'?3:2;if(auto&&(f.collector===3||f.garden===3))automated++;
+  if(guard)guards+=guard.id==='yoon'?3:2;if(auto&&(f.collector===3||f.garden===3)){automated++;salvage+=maintenance-f.barricade*.025;}
  }
  const preservation=claimed.some(b=>b.facilities.storage>=2)?.005:.018,spoilage=s.resources.food*preservation;
  const foodUse=people*2+(s.flags.dog?1:0)+spoilage,waterUse=people*3+(s.flags.dog?.5:0)+irrigation;
  const flow=(production,consumption,stock)=>({production,consumption,net:production-consumption,days:production>=consumption?null:stock/(consumption-production)});
- return{food:flow(food,foodUse,s.resources.food),water:flow(water,waterUse,s.resources.water),partsUpkeep:upkeep,capacity:{food:foodCapacity,water:waterCapacity},people,beds,spoilage,irrigation,guards,automated,maintenance:powered};
+ return{food:flow(food,foodUse,s.resources.food),water:flow(water,waterUse,s.resources.water),partsUpkeep:Math.max(0,upkeep-salvage),capacity:{food:foodCapacity,water:waterCapacity},people,beds,spoilage,irrigation,guards,automated,maintenance:powered};
 }
 function enforceCapacity(s){const caps=getEconomy(s).capacity;for(const k of ['food','water'])s.resources[k]=clamp(s.resources[k],0,caps[k]);s.resources.parts=clamp(s.resources.parts,0,500);s.resources.medicine=clamp(s.resources.medicine,0,50);}
 function change(s,e={}){for(const[k,n]of Object.entries(e.resources||{}))s.resources[k]=Math.max(0,s.resources[k]+n);for(const[k,n]of Object.entries(e.stats||{}))s.stats[k]=clamp(s.stats[k]+n,0,100);Object.assign(s.flags,e.flags||{});if(e.resident)addResident(s,e.resident);enforceCapacity(s);}
@@ -79,14 +79,14 @@ function addResident(s,id){let data=RESIDENTS.find(r=>r.id===id);if(id==='distri
 function refreshMilestones(s){homeFlags(s);for(const b of s.buildings){if(b.id!=='home'&&b.searched>=Math.ceil(b.capacity*.7)&&b.zombiesRemaining===0)s.flags[`${b.id}Safe`]=true;}s.flags.secondRoof=s.buildings.filter(b=>b.claimed).length>=2;s.flags.districtClaimed=s.buildings.some(b=>b.claimed&&b.id.startsWith('district_'));s.flags.automatedWater=s.buildings.some(b=>b.claimed&&b.facilities.collector===3&&b.facilities.power>=2);const econ=getEconomy(s);s.flags.selfSufficient=econ.food.net>=0&&econ.water.net>=0&&econ.automated>=2&&econ.people>=4;}
 
 const FACILITIES={
- collector:{names:['빗물받이','여과 급수기','자동 정수 펌프'],cost:[{parts:8,water:1},{parts:16,water:3},{parts:28,water:5}],duration:[480,900,1440],description:['날씨에 따라 식수 0.55~1.8/일. 관리 주민이 있으면 +1.7.','식수 2.3~4.8/일. 관리 주민 +3.2.','전력 2단계와 유지 자재가 있으면 식수 7.8/일. 관리 주민 +4.4.']},
- garden:{names:['작은 재배상','확장 재배상','자동 수경 재배'],cost:[{parts:10,water:3},{parts:18,water:5},{parts:30,water:8}],duration:[600,1080,1800],description:['식량 0.65/일, 관수 0.35/일. 재배 주민 +1.15.','식량 1.6/일, 관수 0.7/일. 재배 주민 +2.4.','전력 2단계와 유지 자재가 있으면 식량 4.8/일. 재배 주민 +3.8.']},
- barricade:{names:['출입문 보강','계단 방어선','옥상 경보망'],cost:[{parts:7},{parts:14},{parts:22}],duration:[360,720,1200],description:['방어 +16. 경계 주민 배치 가능.','방어 +22. 일상 방어 마모 감소.','방어 +28. 경계와 함께 침입 위험을 낮춤.']},
- storage:{names:['그늘 보관대','밀폐 저장고','공동 보급창고'],cost:[{parts:8},{parts:16},{parts:26}],duration:[420,780,1260],description:['식량 한도 +10 · 식수 한도 +14.','저장량 추가 확장. 음식 부패율이 크게 줄어듦.','더 많은 이웃을 위한 비축 공간 확보.']},
- beds:{names:['여분의 침상','단열 침실','이웃 숙소'],cost:[{parts:6,food:1},{parts:12,food:2},{parts:20,food:3}],duration:[360,720,1080],description:['이 옥상 잠자리 +2. 구조한 주민의 합류에 필요.','이 옥상 잠자리 +2.','이 옥상 잠자리 +2.']},
- power:{names:['소형 태양전지','축전·배전 설비','보조 전원'],cost:[{parts:16},{parts:24},{parts:32}],duration:[900,1440,1800],description:['전기를 모으기 시작함. 자재 유지비 발생.','자동 펌프와 수경 재배에 필요한 안정 전력.','예비 전력 확보. 장기 거주 시설의 기반.']},
- radio:{names:['수신기 수리','이웃 교신기','지구 중계기'],cost:[{parts:9},{parts:16},{parts:24}],duration:[540,960,1440],description:['이웃과 연락하는 수신기를 수리.','새 지구로 향하는 루트 개척의 준비.','여러 옥상의 연락망을 연결.']},
- workshop:{names:['공구 작업대','정비 작업장','공동 수리실'],cost:[{parts:9},{parts:16},{parts:24}],duration:[480,900,1440],description:['교체 부품을 회수할 준비.','설비 정비를 위한 공구 정리.','공동체의 정비 거점.']},
+ collector:{names:['빗물받이','여과 급수기','자동 정수 펌프'],cost:[{parts:6,water:1},{parts:8,water:2},{parts:10,water:3}],duration:[480,900,1440],description:['날씨에 따라 식수 0.55~1.8/일. 관리 주민이 있으면 +1.7.','식수 2.3~4.8/일. 관리 주민 +3.2.','전력 2단계와 유지 자재가 있으면 식수 7.8/일. 관리 주민 +4.4.']},
+ garden:{names:['작은 재배상','확장 재배상','자동 수경 재배'],cost:[{parts:6,water:2},{parts:8,water:3},{parts:10,water:4}],duration:[600,1080,1800],description:['식량 0.65/일, 관수 0.35/일. 재배 주민 +1.15.','식량 1.6/일, 관수 0.7/일. 재배 주민 +2.4.','전력 2단계와 유지 자재가 있으면 식량 4.8/일. 재배 주민 +3.8.']},
+ barricade:{names:['출입문 보강','계단 방어선','옥상 경보망'],cost:[{parts:4},{parts:8},{parts:12}],duration:[360,720,1200],description:['방어 +16. 경계 주민 배치 가능.','방어 +22. 일상 방어 마모 감소.','방어 +28. 경계와 함께 침입 위험을 낮춤.']},
+ storage:{names:['그늘 보관대','밀폐 저장고','공동 보급창고'],cost:[{parts:5},{parts:8},{parts:12}],duration:[420,780,1260],description:['식량 한도 +10 · 식수 한도 +14.','저장량 추가 확장. 음식 부패율이 크게 줄어듦.','더 많은 이웃을 위한 비축 공간 확보.']},
+ beds:{names:['여분의 침상','단열 침실','이웃 숙소'],cost:[{parts:4,food:1},{parts:6,food:1},{parts:8,food:2}],duration:[360,720,1080],description:['이 옥상 잠자리 +2. 구조한 주민의 합류에 필요.','이 옥상 잠자리 +2.','이 옥상 잠자리 +2.']},
+ power:{names:['소형 태양전지','축전·배전 설비','보조 전원'],cost:[{parts:8},{parts:10},{parts:12}],duration:[900,1440,1800],description:['전기를 모으기 시작함. 자재 유지비 발생.','자동 펌프와 수경 재배에 필요한 안정 전력.','예비 전력 확보. 장기 거주 시설의 기반.']},
+ radio:{names:['수신기 수리','이웃 교신기','지구 중계기'],cost:[{parts:6},{parts:8},{parts:12}],duration:[540,960,1440],description:['이웃과 연락하는 수신기를 수리.','새 지구로 향하는 루트 개척의 준비.','여러 옥상의 연락망을 연결.']},
+ workshop:{names:['공구 작업대','정비 작업장','공동 수리실'],cost:[{parts:6},{parts:8},{parts:12}],duration:[480,900,1440],description:['교체 부품을 회수할 준비.','설비 정비를 위한 공구 정리.','공동체의 정비 거점.']},
 };
 const CRAFTS={blade:{label:'보강 손도끼',cost:{parts:2},duration:120,charges:4,description:'조우에서 사용. 4회 사용, 건강 피해를 줄여 감염자를 제압.'},rope:{label:'등반 로프',cost:{parts:2},duration:150,charges:3,description:'조우·루트·옥상 연결에 사용. 매번 1회분 소모.'},decoy:{label:'소리 유인기',cost:{parts:1,food:.25},duration:90,charges:1,description:'조우에서 감염자를 유인한 뒤 봉쇄. 건강 피해가 적음.'},bandage:{label:'삶은 붕대',cost:{water:1,parts:.5},duration:120,charges:1,description:'붕대 치료로 건강 16 회복. 물과 자재를 소비.'}};
 function facilityReason(s,b,id,level){if(!b.claimed)return'수색과 감염자 처리를 마치고 옥상을 연결해야 합니다';if(level>=3)return'최종 단계 완료';if(level>=1&&id==='collector'&&!s.flags.waterPlan)return'의원에서 정수 설계를 찾아야 합니다';if(level>=1&&id==='garden'&&!s.flags.cropPlan)return'배움터에서 재배 관찰일지가 필요합니다';if(id==='power'&&!s.flags.automationPlan)return'공방의 펌프 제어 회로가 필요합니다';if(level===2&&['collector','garden'].includes(id)){if(!s.flags.friendHome)return'민우를 구출해 데려와야 합니다';if(b.facilities.power<2)return'이 옥상 전력 설비 2단계 필요';if(id==='garden'&&!s.flags.seedBank)return'어머니의 씨앗 봉투를 찾아야 합니다';}if(level>=1&&['storage','beds','barricade','radio','workshop'].includes(id)&&!s.flags.secondRoof)return'다른 건물의 수색을 마치고 두 번째 옥상을 연결해야 합니다';return'';}
@@ -110,7 +110,7 @@ export function getActions(s){
 export function startAction(s,id){const a=getActions(s).find(a=>a.id===id);if(!a)return{ok:false,reason:'알 수 없는 행동입니다'};if(a.disabled)return{ok:false,reason:a.reason};pay(s,a.cost);const b=selected(s);if(id==='claim_roof'||(id.startsWith('route_')&&id!=='route_next'))s.gear.rope--;if(id==='bandage')s.gear.bandage--;s.action={id,label:a.label,remaining:a.duration,total:a.duration,buildingId:b.id};log(s,`${a.label} 시작.`,'action');return{ok:true};}
 
 function search(s,b,waterOnly){
- b.searched++;const food=waterOnly?.2+random(s)*.3:.85+random(s)*.8,water=waterOnly?2.2+random(s)*1.2:.7+random(s)*.7,parts=waterOnly?.5+random(s)*.4:1+random(s)*.65;
+ b.searched++;const food=waterOnly?.2+random(s)*.3:.85+random(s)*.8,water=waterOnly?2.2+random(s)*1.2:.7+random(s)*.7,parts=waterOnly?.85+random(s)*.55:1.45+random(s)*.85;
  const damage=.6+random(s)*1.2-(s.flags.scout?.3:0);change(s,{resources:{food,water,parts},stats:{health:-damage}});
  // Medicine is a finite find, never a free recurring event reward.
  if(b.searched%8===0)change(s,{resources:{medicine:1}});
