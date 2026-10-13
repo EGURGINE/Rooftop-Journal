@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#263c3a">
+  <meta name="description" content="멈춰버린 도시, 작은 옥상에서 이어가는 오늘. 선택과 인연으로 완성하는 좀비 아포칼립스 생존 일지.">
+  <title>옥상일지 · 지붕 위에 남은 하루</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%233c5145'/%3E%3Cpath d='M10 45L32 14L54 45ZM32 14V45' fill='none' stroke='%23ede8d5' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="world" aria-label="폐허가 된 도시와 옥상 캠프의 입체 풍경"></div>
+  <div class="scene-shade" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div id="scene-error" hidden></div>
+
+  <header class="topbar">
+    <a class="brand" href="#" id="brand" aria-label="옥상일지 안내">
+      <svg viewBox="0 0 46 38" aria-hidden="true"><path d="M3 30L21 6l19 24M21 6v24M8 30h31M32 7h9M36 3v8"/></svg>
+      <span><strong>옥상일지</strong><small>ROOFTOP JOURNAL</small></span>
+    </a>
+    <div id="clock" class="clock-panel" hidden>
+      <span class="clock-day">DAY <b id="day">01</b></span><span class="divider"></span>
+      <span id="time">08:00</span><span class="sun-icon" id="weather-icon"></span><span id="weather">맑음</span>
+      <div class="day-track"><i id="day-progress"></i></div>
+    </div>
+    <nav class="top-tools" aria-label="화면 설정">
+      <button class="icon-button" id="sound" title="환경음 켜기" aria-label="환경음 켜기"></button>
+      <button class="icon-button" id="quality" title="그래픽 품질: 높음" aria-label="그래픽 품질 변경"></button>
+      <button class="icon-button" id="help" title="플레이 안내" aria-label="플레이 안내"></button>
+    </nav>
+  </header>
+
+  <main id="welcome" class="welcome">
+    <div class="eyebrow"><i></i> 무너진 도시에서, 이어지는 삶</div>
+    <h1>도시는 멈췄고,<br>오늘도 <em>살아간다.</em></h1>
+    <p class="intro">세상이 끝나도 하루는 시작됩니다.<br>이 작은 옥상에 불을 피우고,<br>당신만의 생존 일지를 써 내려가세요.</p>
+    <div class="start-roof"><span class="tiny-label">이번 이야기의 시작</span><div><strong id="preview-roof">옥상을 찾고 있습니다</strong><button id="reroll" class="text-button" title="다른 옥상 둘러보기">다른 옥상 ↻</button></div><p id="preview-description"></p></div>
+    <button class="primary-button" id="start">이곳에서 살아가기 <span>↗</span></button>
+    <button class="continue-button" id="continue" hidden>지난 일지 이어 쓰기 <span>→</span></button>
+    <p class="welcome-note">하루는 약 4분 · 선택할 때는 잠시 멈춥니다</p>
+  </main>
+
+  <div id="game-ui" hidden>
+    <aside class="survival-panel paper" aria-label="생존 현황">
+      <div class="panel-heading"><span>나의 작은 안식처</span><span class="status-dot"></span></div>
+      <h2 id="roof-name">옥상 캠프</h2>
+      <div class="roof-sub"><span id="roof-floor"></span><span id="companion">생존자 1명</span></div>
+      <div class="section-rule"><span>오늘을 버틸 것들</span></div>
+      <div id="resources" class="resources"></div>
+      <div class="section-rule"><span>몸과 마음</span></div>
+      <div id="stats" class="stats"></div>
+      <div id="facilities" class="facility-list"></div>
+      <div class="panel-footer"><span id="save-status">자동으로 기록됩니다</span><button id="save" title="지금 저장" aria-label="지금 저장"></button></div>
+    </aside>
+
+    <div class="world-caption"><span class="coordinate">SEOUL · SAFEHOUSE <span id="seed-label"></span></span><p id="world-thought">아직, 살아갈 이유가 있다.</p></div>
+    <div id="pause-tag" class="pause-tag" hidden>잠시 쉬어가는 중</div>
+    <button id="story-open" class="story-peek" aria-label="이야기와 단서 펼치기"><span id="story-chapter">첫 번째 장</span><strong id="story-title">아직 끝나지 않은 이야기</strong><p id="story-objective">작은 신호에 귀 기울여보세요.</p><small>이야기 · 능력 · 단서 펼치기 ↗</small></button>
+
+    <section class="journal paper" aria-label="생존 일지">
+      <button class="journal-heading" id="journal-toggle"><span><span class="journal-symbol">≡</span> 오늘의 기록</span><span id="journal-expand">↗</span></button>
+      <div id="journal-entries" class="journal-entries" aria-live="polite"></div>
+    </section>
+
+    <section class="action-dock paper" aria-label="캠프에서 할 일">
+      <div class="dock-header"><div><span class="eyebrow small">작은 행동이 내일을 바꿉니다</span><h2>무엇을 할까요?</h2></div><div class="time-controls"><button id="pause" title="일시정지 (Space)" aria-label="일시정지"></button><button data-speed="1" class="active">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button></div></div>
+      <div class="action-tabs" role="tablist" aria-label="행동 종류"><button role="tab" aria-selected="true" data-tab="daily">생활</button><button role="tab" aria-selected="false" data-tab="outside">바깥 탐색</button><button role="tab" aria-selected="false" data-tab="build">캠프 가꾸기</button><button role="tab" aria-selected="false" data-tab="supplies">소지품</button></div>
+      <div id="actions" class="actions"></div>
+      <div id="current-action" class="current-action" hidden><div><span id="action-label"></span><span id="action-time"></span></div><div class="action-track"><i id="action-progress"></i></div></div>
+    </section>
+  </div>
+
+  <footer class="scene-footer"><span id="scene-label">지붕 위에 남은 하루</span><div><span id="ui-hint" hidden>SPACE 일시정지</span><button id="view">풍경 넓게 보기 ↗</button><button id="hide-ui" hidden>풍경만 보기</button></div><span class="version">VOL. 01 / EARLY DAYS</span></footer>
+  <button id="show-ui" hidden>일지로 돌아오기 <span>H</span></button>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <div id="event-layer" class="event-layer" hidden><section class="event-card paper" role="dialog" aria-modal="true" aria-labelledby="event-title"><div class="event-topline"><span id="event-kicker">옥상에 찾아온 이야기</span><span>시간이 멈췄습니다</span></div><div id="event-art" class="event-art" aria-hidden="true"></div><span class="event-day" id="event-day"></span><h2 id="event-title"></h2><p id="event-body"></p><div id="event-choices"></div><p class="event-footnote">서두르지 않아도 괜찮아요. 당신의 선택을 기다립니다.</p></section></div>
+  <div id="modal-layer" class="modal-layer" hidden><section class="modal paper" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button id="modal-close" class="modal-close" aria-label="닫기">×</button><span id="modal-kicker" class="eyebrow"></span><h2 id="modal-title"></h2><div id="modal-body"></div><div id="modal-buttons"></div></section></div>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>

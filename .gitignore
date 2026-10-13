@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.site-workflow/
+.sites/
+*.tgz
+*.log
+artifacts/
+tests/scene-baseline.js
+tests/scene-candidate.js

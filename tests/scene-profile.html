@@ -1,0 +1,7 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>옥상 장면 성능 검증</title><style>body{margin:0;background:#233730;font:14px sans-serif}#scene{position:absolute;inset:0}#report{position:absolute;left:20px;top:20px;background:#fffde8;padding:15px;z-index:3;white-space:pre}#orbit{position:absolute;top:20px;right:20px;z-index:4}</style><div id="scene"></div><pre id="report">측정 중</pre><button id="orbit">자동 회전 측정</button><script type="module">
+const {createScene}=await import(location.search.includes('baseline')?'./scene-baseline.js':location.search.includes('candidate')?'./scene-candidate.js':'../src/scene.js');
+const state={seed:777777,time:0,paused:true,roof:{type:'utility',height:13},flags:{},resources:{food:8,water:10,parts:5,medicine:2},action:null};const scene=createScene(document.querySelector('#scene'),state);
+let last=performance.now(),frames=0,start=last,reportStart=last,maxFrame=0;let intervals=[];
+function frame(now){const delta=(now-last)/1000;last=now;maxFrame=Math.max(maxFrame,delta*1000);scene.update(state,delta);frames++;intervals.push(delta*1000);if(now-reportStart>1500){const a=intervals.slice().sort((x,y)=>x-y);document.querySelector('#report').textContent=JSON.stringify({...scene.getMetrics(),fps:Math.round(1000/(intervals.reduce((x,y)=>x+y,0)/intervals.length)),p95ms:Math.round(a[Math.floor(a.length*.95)]),samples:intervals.length},null,2);intervals=[];reportStart=now;}requestAnimationFrame(frame);}requestAnimationFrame(frame);
+document.querySelector('#orbit').onclick=()=>{scene.setView('wide');};
+</script></html>
